@@ -27,7 +27,7 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('exp','test','')
-flags.DEFINE_integer('batch_size',8,'')
+flags.DEFINE_integer('batch_size',20,'')
 flags.DEFINE_integer('epochs',1000,'')
 flags.DEFINE_float('lr',3*10**-5,'')
 flags.DEFINE_float('dropout',0.2,'')
@@ -44,6 +44,12 @@ class CustomDataGen(tf.keras.utils.Sequence):
         self.img_cats = [0] * len(self.spill_images) + [1] * len(self.not_spill_images)
         self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
 
+        self.puddle_images = glob.glob(directory+'/puddle/*')
+        self.not_puddle_images = glob.glob(directory+'/not_puddle/*')
+        self.all_puddles = self.puddle_images + self.not_puddle_images
+        self.puddle_cats = [0] * len(self.puddle_images) + [1] * len(self.not_puddle_images)
+        self.all_puddles, self.puddle_cats = shuffle(self.all_puddles, self.puddle_cats)
+
         self.vids = glob.glob(directory+'/spill_vids/*')
         self.vid_frames = {}
         self.vid_cats = {}
@@ -56,57 +62,84 @@ class CustomDataGen(tf.keras.utils.Sequence):
         self.batch_size = batch_size
         self.input_size = input_size
         
-        self.n = len(self.all_images)
         self.train = train
+        if self.train:
+            self.n = len(self.all_puddles)
+        else:
+            self.batch_size = 9
+            self.n = len(self.all_images)
+        
 
-    def __get_image__(self,index,min_crop_size,val_min_crop_size,vid_image=False):
-        if vid_image:
+    def __get_image__(self,index,dataset=''):
+        if dataset == 'video':
             vid = self.vids[np.random.randint(len(self.vids))]
             f_ix = np.random.randint(len(self.vid_frames[vid]))
             img = cv2.imread(self.vid_frames[vid][f_ix])
             cat = self.vid_cats[vid][f_ix]
-        else:
-            img = cv2.imread(self.all_images[index])
-            cat = self.img_cats[index]
+        elif dataset == 'spill':
+            s_ix = np.random.randint(len(self.all_images))
+            img = cv2.imread(self.all_images[s_ix])
+            cat = self.img_cats[s_ix]
+        elif dataset == 'puddle':
+            img = cv2.imread(self.all_puddles[index])
+            cat = self.puddle_cats[index]
 
         if img is None:
             print(self.all_images[index])
         img = img/255.
         h,w,_ = img.shape
+        img_size = min(h,w)
         if self.train:
             img = tf.keras.preprocessing.image.random_channel_shift(img, intensity_range=0.3, channel_axis=2)
-            min_crop_size = min_crop_size[0] if cat==1 else min_crop_size[1]
-            cr_h,cr_w = np.random.randint(int(min_crop_size*h),h+1), np.random.randint(int(min_crop_size*w),w+1)
-            crop = tf.image.random_crop(img,(cr_h,cr_w,3))
-            crop = tf.image.central_crop(crop,central_fraction=min(cr_h/cr_w,cr_w/cr_h))
-            crop = tfa.image.rotate(crop,np.random.randint(-30,30))
-            resize_frac = 0.5+np.random.random()
-            #if int(cr_h*resize_frac) > self.input_size[0] or int(cr_w*resize_frac) > self.input_size[1]:
-            if True:
-                img = tf.image.resize_with_pad(crop, target_height=self.input_size[0], target_width=self.input_size[1])
+            if dataset == 'spill':
+                if cat == 0:
+                    crop_size = np.random.randint(int(0.7*img_size),img_size+1)
+                else:
+                    crop_size = np.random.randint(int(0.1*img_size),int(0.6*img_size))
+            elif dataset == 'video':
+                if max(h,w) > 2*img_size:
+                    crop_size = np.random.randint(int(0.9*img_size),img_size+1)   
+                else:
+                    crop_size = np.random.randint(int(0.7*img_size),img_size+1)
+            elif dataset == 'puddle':
+                crop_size = np.random.randint(int(0.8*img_size),img_size+1)
+
+            crop = tf.image.random_crop(img,(crop_size,crop_size,3))
+            crop = tfa.image.rotate(crop,np.random.randint(-20,20))
+            if crop_size > 160:
+                new_size = np.random.randint(80,224)
             else:
-                img = tf.image.resize_with_pad(crop, target_height=int(cr_h*resize_frac), target_width=int(cr_w*resize_frac))
-                img = tf.image.pad_to_bounding_box(img, min((self.input_size[0]-img.shape[0])//2,20), min((self.input_size[1]-img.shape[1])//2,20), \
-                    self.input_size[0], self.input_size[1])
+                new_size = min(max(int(crop_size*(0.7+np.random.random())),80),224)
+
+            img = tf.image.resize(crop, [new_size,new_size])
 
             img = tf.image.random_brightness(img, 0.7)
             img = tf.image.random_contrast(img, 0.3,1.7)
             img = tf.image.random_hue(img, 0.25)
             img = tf.image.random_flip_left_right(img)
+            img = tf.image.resize_with_crop_or_pad(img,224,224)
         else:
-            min_crop_size = val_min_crop_size[0] if cat==1 else val_min_crop_size[1]
-            cr_h,cr_w = np.random.randint(int(min_crop_size*h),h+1), np.random.randint(int(min_crop_size*w),w+1)
-            crop = tf.image.random_crop(img,(cr_h,cr_w,3))
-            crop = tf.image.central_crop(crop,central_fraction=min(cr_h/cr_w,cr_w/cr_h))
-            #if cr_h > self.input_size[0] or cr_w > self.input_size[1]:
-            if True:
-                img = tf.image.resize_with_pad(crop, target_height=self.input_size[0], target_width=self.input_size[1])
+            if dataset == 'spill':
+                if cat == 0:
+                    crop_size = np.random.randint(int(0.7*img_size),img_size+1)
+                else:
+                    crop_size = np.random.randint(int(0.1*img_size),int(0.6*img_size))
+            elif dataset == 'video':
+                if max(h,w) > 2*img_size:
+                    crop_size = np.random.randint(int(0.9*img_size),img_size+1)   
+                else:
+                    crop_size = np.random.randint(int(0.7*img_size),img_size+1)
+            elif dataset == 'puddle':
+                crop_size = np.random.randint(int(0.8*img_size),img_size+1)
+
+            crop = tf.image.random_crop(img,(crop_size,crop_size,3))
+            if crop_size > 160:
+                new_size = np.random.randint(80,224)
             else:
-                img = tf.image.resize_with_pad(crop, target_height=cr_h, target_width=cr_w)
-                img = tf.image.pad_to_bounding_box(img, min((self.input_size[0]-img.shape[0])//2,20), min((self.input_size[1]-img.shape[1])//2,20), \
-                    self.input_size[0], self.input_size[1])
-            img = tf.image.random_brightness(img, 0.2)
-            img = tf.image.random_contrast(img, 0.8,1.2)
+                new_size = min(max(int(crop_size*(0.7+np.random.random())),80),224)
+
+            img = tf.image.resize(crop, [new_size,new_size])
+            img = tf.image.resize_with_crop_or_pad(img,224,224)
 
         lab = np.array([1-cat])
         return img,lab
@@ -118,13 +151,20 @@ class CustomDataGen(tf.keras.utils.Sequence):
         images = []
         labels = []
         for ix in range(self.batch_size):
-            img,target = self.__get_image__(index+ix,min_crop_size=(0.2,0.6),val_min_crop_size=(0.2,1.))
-            images.append(img)
-            labels.append(target)
+            if self.train:
+                img,target = self.__get_image__(index+ix, dataset='puddle')
+                images.append(img)
+                labels.append(target)
 
-            img,target = self.__get_image__(index+ix,min_crop_size=(0.75,0.75),val_min_crop_size=(0.75,0.75),vid_image=True)
-            images.append(img)
-            labels.append(target)
+            if ix < 8:
+                img,target = self.__get_image__(index+ix, dataset='spill')
+                images.append(img)
+                labels.append(target)
+
+            if ix < 4:
+                img,target = self.__get_image__(index+ix, dataset='video')
+                images.append(img)
+                labels.append(target)
 
         images = np.stack(images)
         labels = np.stack(labels)
