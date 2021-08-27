@@ -35,8 +35,8 @@ for gpu_instance in physical_devices:
 height = 224
 width = 224
 
-model_weights = "26Aug1_127"
-video = "juice"
+model_weights = "27Aug6_99"
+video = "water"
 
 pred_thresh = 2
 diff_thresh = 3
@@ -145,16 +145,11 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             #motion_bboxes = motion_det.detect(frame)
             motion_bboxes = []
 
+            print(no_spill_frame.shape,frame.shape)
             crops, no_spill_crops, bboxes = get_spill_crops(frame.copy(), no_spill_frame.copy(), candidate_pix.astype(np.uint8), motion_bboxes)
             for crop,ns_crop,bbox in zip(crops,no_spill_crops,bboxes):
                 resized = crop/255.
-                #if resized.shape[0] > 224 or resized.shape[1] > 224:
-                #resized = tf.image.resize_with_pad(resized, target_height=int(resized.shape[0]*1.8), target_width=int(resized.shape[1]*1.8))
-                #else:
-                #resized = tf.image.pad_to_bounding_box(resized, min((224-resized.shape[0])//2,20), min((224-resized.shape[1])//2,20), 224, 224)
-                print(resized.shape,bbox)
                 resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                print(resized.shape)
                 resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
                 resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
                 #resized = tf.image.resize(resized, [224,224])
@@ -162,26 +157,25 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 outp = spill_classifier(resized,training=False)
 
                 resized = ns_crop/255.
-                #if resized.shape[0] > 224 or resized.shape[1] > 224:
-                if True:
-                    resized = tf.image.resize_with_pad(resized, target_height=224, target_width=224)
-                else:
-                    resized = tf.image.pad_to_bounding_box(resized, min((224-resized.shape[0])//2,20), min((224-resized.shape[1])//2,20), 224, 224)
-
+                resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
+                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
+                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
+                #resized = tf.image.resize(resized, [224,224])
                 resized = tf.reshape(resized,(1,224,224,3))
                 ns_outp = spill_classifier(resized,training=False)
 
-                #conf = outp[:,spill].numpy()[0]
-                pred = outp[0,0]
-                diff = pred-ns_outp[0,0]
-                logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
-                #logits_str = "Pred_{:.1f}".format(pred)
-                #conds = 0
-                #if pred > pred_thresh: conds += 1
-                #if diff > diff_thresh: conds += 1
-                #if pred+diff > sum_thresh: conds += 1
+                embds = tf.concat([outp,ns_outp], axis=0)
+                embds = tf.nn.l2_normalize(embds, axis=1)
+                sims_all = tf.matmul(embds,embds,transpose_b=True)
 
-                if pred > 0:#conds >= cond_thresh:
+                #conf = outp[:,spill].numpy()[0]
+                #pred = outp[0,0]
+                #diff = pred-ns_outp[0,0]
+                #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
+                
+                logits_str = "Sim_{}".format(sims_all[0,1].numpy())
+
+                if False:
                     cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
                     cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
                     #cv2.putText(img, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
@@ -196,7 +190,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             
             writer.write(img)
             cv2.imshow('a',img)
-            if cv2.waitKey(0) & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
     writer.release()
@@ -204,7 +198,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
     print("finished")
 
 def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
-    CROP_DELTA = 30
+    CROP_DELTA = 20
     max_size = 60
 
     cnts,_ = cv2.findContours(spill_seg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -291,7 +285,7 @@ spill_classifier.add(layers.GlobalMaxPooling2D(name="gap"))
 #avoid overfitting
 #model.add(layers.Dropout(rate=0.2, name="dropout_out"))
 # Set NUMBER_OF_CLASSES to the number of your final predictions.
-spill_classifier.add(layers.Dense(1, activation="linear", name="fc_out"))
+spill_classifier.add(layers.Dense(320, activation="linear", name="fc_out"))
 spill_classifier.load_weights("effnet_weights/"+model_weights+'.h5')
 
 no_spill_frame = cv2.imread('reference_frames/{}_ref.png'.format(video))
