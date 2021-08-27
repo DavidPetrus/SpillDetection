@@ -35,7 +35,7 @@ for gpu_instance in physical_devices:
 height = 224
 width = 224
 
-model_weights = "20Aug3_94"
+model_weights = "26Aug1_127"
 video = "juice"
 
 pred_thresh = 2
@@ -152,8 +152,12 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 #resized = tf.image.resize_with_pad(resized, target_height=int(resized.shape[0]*1.8), target_width=int(resized.shape[1]*1.8))
                 #else:
                 #resized = tf.image.pad_to_bounding_box(resized, min((224-resized.shape[0])//2,20), min((224-resized.shape[1])//2,20), 224, 224)
+                print(resized.shape,bbox)
                 resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                resized = tf.image.resize_with_pad(resized, target_height=224, target_width=224)
+                print(resized.shape)
+                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
+                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
+                #resized = tf.image.resize(resized, [224,224])
                 resized = tf.reshape(resized,(1,224,224,3))
                 outp = spill_classifier(resized,training=False)
 
@@ -170,14 +174,14 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 #conf = outp[:,spill].numpy()[0]
                 pred = outp[0,0]
                 diff = pred-ns_outp[0,0]
-                #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
-                logits_str = "Pred_{:.1f}".format(pred)
+                logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
+                #logits_str = "Pred_{:.1f}".format(pred)
                 #conds = 0
                 #if pred > pred_thresh: conds += 1
                 #if diff > diff_thresh: conds += 1
                 #if pred+diff > sum_thresh: conds += 1
 
-                if pred > 2:#conds >= cond_thresh:
+                if pred > 0:#conds >= cond_thresh:
                     cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
                     cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
                     #cv2.putText(img, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
@@ -192,7 +196,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             
             writer.write(img)
             cv2.imshow('a',img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(0) & 0xFF == ord('q'):
                 break
 
     writer.release()
@@ -200,16 +204,15 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
     print("finished")
 
 def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
-    CROP_DELTA = 0
-    min_size = 50
-    max_size = 90
+    CROP_DELTA = 30
+    max_size = 60
 
     cnts,_ = cv2.findContours(spill_seg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bboxes = []
     img_h,img_w,_ = image.shape
     for c in cnts:
         x,y,w,h = cv2.boundingRect(c)
-        if w*h < 300:
+        if w < 30 or h < 30:
             continue
 
         if w > max_size:
@@ -234,8 +237,13 @@ def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
 
         if not mot_in_crop:
             bboxes.append(crop_bbox)
+            '''cr_w,cr_h = crop_bbox[2]-crop_bbox[0], crop_bbox[3]-crop_bbox[1]
+            bboxes.append((crop_bbox[0],crop_bbox[1],crop_bbox[2]-cr_w//2,crop_bbox[3]-cr_h//2))
+            bboxes.append((crop_bbox[0]+cr_w//2,crop_bbox[1],crop_bbox[2],crop_bbox[3]-cr_h//2))
+            bboxes.append((crop_bbox[0],crop_bbox[1]+cr_h//2,crop_bbox[2]-cr_w//2,crop_bbox[3]))
+            bboxes.append((crop_bbox[0]+cr_w//2,crop_bbox[1]+cr_h//2,crop_bbox[2],crop_bbox[3]))'''
     
-    overlap = True
+    '''overlap = True
     while overlap:
         if len(bboxes) < 2:
             overlap = False
@@ -263,17 +271,16 @@ def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
                         bb_ix = -1
                         del bboxes[bb_ix2]
                         overlap = True
-                        break
+                        break'''
 
     ret_bboxes = []    
     crops = []
     no_spill_crops = []
     for bbox in bboxes:
         cr_w,cr_h = bbox[2]-bbox[0], bbox[3]-bbox[1]
-        if cr_w > min_size or cr_h > min_size:
-            crops.append(image[bbox[1]:bbox[3],bbox[0]:bbox[2]])
-            no_spill_crops.append(no_spill_frame[bbox[1]:bbox[3],bbox[0]:bbox[2]])
-            ret_bboxes.append(bbox)
+        crops.append(image[bbox[1]:bbox[3],bbox[0]:bbox[2]])
+        no_spill_crops.append(no_spill_frame[bbox[1]:bbox[3],bbox[0]:bbox[2]])
+        ret_bboxes.append(bbox)
     
     return crops, no_spill_crops, ret_bboxes
 
