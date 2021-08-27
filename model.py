@@ -25,15 +25,15 @@ class CustomModel(tf.keras.Sequential):
 
             embds = self(X, training=True)  # Forward pass
             embds = tf.nn.l2_normalize(embds, axis=1)
-            sims_all = tf.matmul(embds[:28],embds,transpose_b=True)
-            sims_all = tf.reshape(sims_all,[28,84])
-            sp_all = sims_all[:,:28]
-            sn_all = sims_all[:,28:]
+            sims_all = tf.matmul(embds[:32],embds,transpose_b=True)
+            sims_all = tf.reshape(sims_all,[32,96])
+            sp_all = sims_all[:,:32]
+            sn_all = sims_all[:,32:]
 
             sp_puddle = sims_all[:16,:16]
-            sn_puddle = sims_all[:16,28:60]
-            sp_video = sims_all[16:20,16:20]
-            sn_video = sims_all[16:20,60:68]
+            sn_puddle = sims_all[:16,32:64]
+            sp_video = sims_all[16:24,16:24]
+            sn_video = sims_all[16:24,64:80]
 
             loss_all = self.circle_loss(sp_all, sn_all, margin=FLAGS.all_margin)
             loss_puddle = self.circle_loss(sp_puddle, sn_puddle, margin=FLAGS.puddle_margin)
@@ -59,11 +59,11 @@ class CustomModel(tf.keras.Sequential):
 
         embds = self(X, training=True)  # Forward pass
         embds = tf.nn.l2_normalize(embds, axis=1)
-        sims_all = tf.matmul(embds[:12],embds,transpose_b=True)
-        sp_all = sims_all[:,:12]
-        sn_all = sims_all[:,12:]
-        sp_video = sims_all[:4,:4]
-        sn_video = sims_all[:4,12:20]
+        sims_all = tf.matmul(embds[:16],embds,transpose_b=True)
+        sp_all = sims_all[:,:16]
+        sn_all = sims_all[:,16:]
+        sp_video = sims_all[:8,:8]
+        sn_video = sims_all[:8,16:32]
 
         loss_all = self.circle_loss(sp_all, sn_all, margin=FLAGS.all_margin)
         loss_puddle = 0.

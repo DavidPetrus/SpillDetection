@@ -36,16 +36,16 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('batch_size',16,'')
 flags.DEFINE_integer('epochs',1000,'')
-flags.DEFINE_float('lr',3*10**-5,'')
+flags.DEFINE_float('lr',1*10**-4,'')
 flags.DEFINE_float('dropout',0.2,'')
 flags.DEFINE_float('label_smoothing',0.05,'')
 
-flags.DEFINE_float('gamma',40,'')
-flags.DEFINE_float('all_margin',0.3,'')
-flags.DEFINE_float('puddle_margin',0.2,'')
+flags.DEFINE_float('gamma',300,'')
+flags.DEFINE_float('all_margin',0.35,'')
+flags.DEFINE_float('puddle_margin',0.25,'')
 flags.DEFINE_float('vid_margin',0.1,'')
-flags.DEFINE_float('puddle_coeff',0.2,'')
-flags.DEFINE_float('vid_coeff',0.2,'')
+flags.DEFINE_float('puddle_coeff',0.5,'')
+flags.DEFINE_float('vid_coeff',0.5,'')
 
 
 def main(argv):

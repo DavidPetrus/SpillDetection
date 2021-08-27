@@ -101,7 +101,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
                     crop_size = np.random.randint(int(0.8*img_size),img_size+1)
 
                 crop = tf.image.random_crop(img,(crop_size,crop_size,3))
-                crop = tfa.image.rotate(crop,np.random.randint(-20,20))
+                #crop = tfa.image.rotate(crop,np.random.randint(-20,20))
                 if crop_size > 160:
                     new_size = np.random.randint(80,224)
                 else:
@@ -141,8 +141,8 @@ class CustomDataGen(tf.keras.utils.Sequence):
 
         return imgs
 
-    def on_epoch_end(self):
-        self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
+    #def on_epoch_end(self):
+    #    self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
     
     def __getitem__(self, index):
         pos_puddle = []
@@ -176,13 +176,16 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 neg_spill.append(imgs[1])
                 neg_spill.append(imgs[2])
 
-            if ix < 4:
+            if ix < 8:
                 imgs = self.__get_image__(index+ix, dataset=vid_group)
                 pos_video.append(imgs[0])
                 neg_video.append(imgs[1])
                 neg_video.append(imgs[2])
 
-        X = tf.concat([tf.stack(pos_puddle),tf.stack(pos_video),tf.stack(pos_spill),tf.stack(neg_puddle),tf.stack(neg_video),tf.stack(neg_spill)],axis=0)
+        if self.train:
+            X = tf.concat([tf.stack(pos_puddle),tf.stack(pos_video),tf.stack(pos_spill),tf.stack(neg_puddle),tf.stack(neg_video),tf.stack(neg_spill)],axis=0)
+        else:
+            X = tf.concat([tf.stack(pos_video),tf.stack(pos_spill),tf.stack(neg_video),tf.stack(neg_spill)],axis=0)
 
         return X,self.zeros[:X.shape[0]]
     
