@@ -21,6 +21,9 @@ import tensorflow_addons as tfa
 from dataloader import CustomDataGen
 from model import CustomModel
 
+import wandb
+from wandb.keras import WandbCallback
+
 #Use this to check if the GPU is configured correctly
 #from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
@@ -40,15 +43,20 @@ flags.DEFINE_float('lr',1*10**-4,'')
 flags.DEFINE_float('dropout',0.2,'')
 flags.DEFINE_float('label_smoothing',0.05,'')
 
+flags.DEFINE_integer('num_prototypes',20,'')
+flags.DEFINE_integer('top_k',3,'')
 flags.DEFINE_float('gamma',300,'')
-flags.DEFINE_float('all_margin',0.35,'')
-flags.DEFINE_float('puddle_margin',0.25,'')
-flags.DEFINE_float('vid_margin',0.1,'')
-flags.DEFINE_float('puddle_coeff',0.5,'')
-flags.DEFINE_float('vid_coeff',0.5,'')
+flags.DEFINE_float('all_margin',0.25,'')
+#flags.DEFINE_float('puddle_margin',0.3,'')
+#flags.DEFINE_float('vid_margin',0.2,'')
+#flags.DEFINE_float('puddle_coeff',0.1,'')
+#flags.DEFINE_float('vid_coeff',0.5,'')
 
 
 def main(argv):
+
+    wandb.init(project="SpillDetection",name=FLAGS.exp)
+    wandb.config.update(flags.FLAGS)
 
     TRAIN_IMAGES_PATH = "./images/train"
     VAL_IMAGES_PATH = "./images/val"
@@ -91,7 +99,7 @@ def main(argv):
         verbose=1,
         use_multiprocessing=False,
         workers=8,
-        callbacks=[checkpoint])
+        callbacks=[WandbCallback(),checkpoint])
 
 if __name__ == '__main__':
     #torch.multiprocessing.set_start_method('spawn', force=True)
