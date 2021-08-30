@@ -35,8 +35,8 @@ for gpu_instance in physical_devices:
 height = 224
 width = 224
 
-model_weights = "27Aug6_99"
-video = "water"
+model_weights = "27Aug6"
+video = "gallon1_1.mp4"
 
 pred_thresh = 2
 diff_thresh = 3
@@ -288,13 +288,13 @@ spill_classifier.add(layers.GlobalMaxPooling2D(name="gap"))
 spill_classifier.add(layers.Dense(320, activation="linear", name="fc_out"))
 spill_classifier.load_weights("effnet_weights/"+model_weights+'.h5')
 
-no_spill_frame = cv2.imread('reference_frames/{}_ref.png'.format(video))
+no_spill_frame = cv2.imread('reference_frames/{}.png'.format(video[:-4]))
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 run(
-    "input_videos/{}_clipped.avi".format(video),
+    "input_videos/{}".format(video),
     "output_semseg",
     "weights/dpt_hybrid-ade20k-53898607.pt",
     no_spill_frame
