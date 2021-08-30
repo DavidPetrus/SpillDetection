@@ -11,7 +11,13 @@ import random
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import tensorflow as tf
+physical_devices = tf.config.list_physical_devices('GPU')
+for gpu_instance in physical_devices: 
+    tf.config.experimental.set_memory_growth(gpu_instance, True)
+
 from Motion import MotionDetector
+from model import CustomModel
 
 # DPT imports
 import torch
@@ -25,18 +31,22 @@ from dpt.transforms import Resize, NormalizeImage, PrepareForNet
 from tensorflow.keras.applications import * #Efficient Net included here
 from tensorflow.keras import models
 from tensorflow.keras import layers
-import tensorflow as tf
 
-physical_devices = tf.config.list_physical_devices('GPU')
-for gpu_instance in physical_devices: 
-    tf.config.experimental.set_memory_growth(gpu_instance, True)
 
+from absl import flags, app
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_integer('num_prototypes',20,'')
+flags.DEFINE_integer('top_k',3,'')
+flags.DEFINE_string('model_weights','','')
+flags.DEFINE_string('video','','')
+
+flags.DEFINE_float('gamma',300,'')
+flags.DEFINE_float('all_margin',0.25,'')
 
 height = 224
 width = 224
-
-model_weights = "27Aug6_99"
-video = "water"
 
 pred_thresh = 2
 diff_thresh = 3
@@ -54,6 +64,14 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
         output_path (str): path to output folder
         model_path (str): path to saved model
     """
+
+    spill_classifier = CustomModel()
+    spill_classifier.build(input_shape=(None,224,224,3))
+    print(spill_classifier.prototype_layer.prototypes)
+
+    spill_classifier.load_weights("effnet_weights/"+FLAGS.model_weights+'.h5')
+    
+    print(spill_classifier.prototype_layer.prototypes)
     print("initialize")
 
     # select device
@@ -97,7 +115,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
         cap = cv2.VideoCapture(input_path)
         ret, frame = cap.read()
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        writer = cv2.VideoWriter('output_videos/'+model_weights+video+'.avi', fourcc, 5.0, (frame.shape[1],frame.shape[0]))
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights+FLAGS.video+'.avi', fourcc, 5.0, (frame.shape[1],frame.shape[0]))
 
         motion_det = MotionDetector(frame,mot_frame_buffer,mot_thresh)
 
@@ -144,8 +162,6 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             img = frame
             #motion_bboxes = motion_det.detect(frame)
             motion_bboxes = []
-
-            print(no_spill_frame.shape,frame.shape)
             crops, no_spill_crops, bboxes = get_spill_crops(frame.copy(), no_spill_frame.copy(), candidate_pix.astype(np.uint8), motion_bboxes)
             for crop,ns_crop,bbox in zip(crops,no_spill_crops,bboxes):
                 resized = crop/255.
@@ -166,14 +182,17 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
 
                 embds = tf.concat([outp,ns_outp], axis=0)
                 embds = tf.nn.l2_normalize(embds, axis=1)
-                sims_all = tf.matmul(embds,embds,transpose_b=True)
+                #sims_all = tf.matmul(embds,embds,transpose_b=True)
+                prototypes = tf.nn.l2_normalize(spill_classifier.prototypes, axis=1)
+                sims_all = tf.matmul(embds,prototypes)
+                sims_top_k,nn_idxs = tf.math.top_k(sims_all,k=1,sorted=False)
 
                 #conf = outp[:,spill].numpy()[0]
                 #pred = outp[0,0]
                 #diff = pred-ns_outp[0,0]
                 #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
                 
-                logits_str = "Sim_{}".format(sims_all[0,1].numpy())
+                logits_str = "SimP_{:.2f}_{}_SimN_{:.2f}_{}".format(sims_top_k[0,0].numpy(),nn_idxs[0,0].numpy(),sims_top_k[1,0].numpy(),nn_idxs[1,0].numpy())
 
                 if False:
                     cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
@@ -190,7 +209,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             
             writer.write(img)
             cv2.imshow('a',img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(0) & 0xFF == ord('q'):
                 break
 
     writer.release()
@@ -278,24 +297,21 @@ def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
     
     return crops, no_spill_crops, ret_bboxes
 
-conv_base = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(height,width,3))
-spill_classifier = models.Sequential()
-spill_classifier.add(conv_base)
-spill_classifier.add(layers.GlobalMaxPooling2D(name="gap"))
-#avoid overfitting
-#model.add(layers.Dropout(rate=0.2, name="dropout_out"))
-# Set NUMBER_OF_CLASSES to the number of your final predictions.
-spill_classifier.add(layers.Dense(320, activation="linear", name="fc_out"))
-spill_classifier.load_weights("effnet_weights/"+model_weights+'.h5')
 
-no_spill_frame = cv2.imread('reference_frames/{}_ref.png'.format(video))
+def main(argv):
 
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark = True
+    no_spill_frame = cv2.imread('reference_frames/{}.png'.format(FLAGS.video[:-4]))
 
-run(
-    "input_videos/{}_clipped.avi".format(video),
-    "output_semseg",
-    "weights/dpt_hybrid-ade20k-53898607.pt",
-    no_spill_frame
-)
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True
+
+    run(
+        "input_videos/{}".format(FLAGS.video),
+        "output_semseg",
+        "weights/dpt_hybrid-ade20k-53898607.pt",
+        no_spill_frame
+    )
+
+if __name__ == '__main__':
+    #torch.multiprocessing.set_start_method('spawn', force=True)
+    app.run(main)

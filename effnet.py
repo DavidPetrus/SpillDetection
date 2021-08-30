@@ -69,28 +69,18 @@ def main(argv):
     width = 224
     epochs = FLAGS.epochs
 
-    conv_base = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(height,width,3))
-
-    #model = models.Sequential()
-    model = CustomModel()
-    model.add(conv_base)
-    model.add(layers.GlobalMaxPooling2D(name="gap"))
-    #avoid overfitting
-    #model.add(layers.Dropout(rate=FLAGS.dropout, name="dropout_out"))
-    # Set NUMBER_OF_CLASSES to the number of your final predictions.
-    model.add(layers.Dense(320, activation="linear", name="fc_out"))
-    #conv_base.trainable = False
+    spill_classifier = CustomModel()
 
     train_generator = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, train=True)
     validation_generator = CustomDataGen(VAL_IMAGES_PATH, batch_size, train=False)
 
-    model.compile(
+    spill_classifier.compile(
         optimizer=optimizers.Adam(lr=FLAGS.lr)
     )
 
-    checkpoint = ModelCheckpoint('effnet_weights/'+FLAGS.exp+'.h5', monitor='val_loss', verbose=1, save_best_only=False, mode='min', period=1)
+    checkpoint = ModelCheckpoint('effnet_weights/'+FLAGS.exp+'.h5', monitor='val_loss', verbose=1, save_weights_only=True, save_best_only=False, mode='min', period=1)
 
-    history = model.fit(
+    history = spill_classifier.fit(
         train_generator,
         steps_per_epoch=NUMBER_OF_TRAINING_IMAGES // batch_size,
         epochs=epochs,
@@ -99,7 +89,7 @@ def main(argv):
         verbose=1,
         use_multiprocessing=False,
         workers=8,
-        callbacks=[WandbCallback(),checkpoint])
+        callbacks=[WandbCallback(save_model=False),checkpoint])
 
 if __name__ == '__main__':
     #torch.multiprocessing.set_start_method('spawn', force=True)

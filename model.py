@@ -1,4 +1,6 @@
 import tensorflow as tf
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras import layers
 
 from absl import flags, app
 
@@ -9,14 +11,38 @@ all_tracker = tf.keras.metrics.Mean(name="loss")
 puddle_tracker = tf.keras.metrics.Mean(name="loss")
 video_tracker = tf.keras.metrics.Mean(name="loss")
 
-class CustomModel(tf.keras.Sequential):
-    def __init__(self, *args, **kwargs):
-        self.gamma = FLAGS.gamma
+class PrototypeSim(tf.keras.layers.Layer):
+    def __init__(self):
+        super(PrototypeSim, self).__init__()
+        self.prototypes = tf.Variable(tf.random.normal((320,FLAGS.num_prototypes)))
 
-        self.prototypes = tf.Variable(tf.random.normal([320,FLAGS.num_prototypes]))
+    def call(self, inputs):
+        embds = tf.nn.l2_normalize(inputs, axis=-1)
+        prototypes = tf.nn.l2_normalize(self.prototypes, axis=-1)
+        sims = tf.matmul(embds,prototypes)
+
+        return sims
+
+class CustomModel(tf.keras.Model):
+    def __init__(self, *args, **kwargs):
+        super(CustomModel, self).__init__(*args, **kwargs)
+
+        self.conv_base = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(224,224,3))
+        self.max_pool = layers.GlobalMaxPooling2D(name="gap")
+        self.proj_head = layers.Dense(320, activation="linear", name="fc_out")
+        self.prototype_layer = PrototypeSim()
+        
+        self.gamma = FLAGS.gamma
         self.top_k = FLAGS.top_k
 
-        super(CustomModel, self).__init__(*args, **kwargs)
+    def call(self, inputs, training=False):
+        x = self.conv_base(inputs, training=training)
+        x = self.max_pool(x)
+        x = self.proj_head(x)
+
+        sims = self.prototype_layer(x)
+
+        return x,sims
 
     def train_step(self, data):
         # Unpack the data. Its structure depends on your model and
@@ -26,12 +52,8 @@ class CustomModel(tf.keras.Sequential):
 
         with tf.GradientTape() as tape:
 
-            embds = self(X, training=True)  # Forward pass
-            embds = tf.nn.l2_normalize(embds, axis=1)
-            prototypes = tf.nn.l2_normalize(self.prototypes, axis=1)
-
-            sims_all = tf.matmul(embds,prototypes)
-            sims_top_k = tf.math.top_k(sims_all,k=self.top_k).values
+            _,sims_all = self(X, training=True)  # Forward pass
+            sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
 
             sp = tf.transpose(sims_top_k[:32])
             sn = tf.transpose(sims_top_k[32:])
@@ -72,13 +94,8 @@ class CustomModel(tf.keras.Sequential):
 
         X,y = data
 
-        embds = self(X, training=True)  # Forward pass
-        embds = tf.nn.l2_normalize(embds, axis=1)
-
-        prototypes = tf.nn.l2_normalize(self.prototypes, axis=1)
-
-        sims_all = tf.matmul(embds,prototypes)
-        sims_top_k = tf.math.top_k(sims_all,k=self.top_k).values
+        _,sims_all = self(X, training=False)  # Forward pass
+        sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
 
         sp = tf.transpose(sims_top_k[:32])
         sn = tf.transpose(sims_top_k[32:])
