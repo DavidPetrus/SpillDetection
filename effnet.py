@@ -37,11 +37,14 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('exp','test','')
-flags.DEFINE_integer('batch_size',16,'')
+flags.DEFINE_integer('batch_size',8,'')
 flags.DEFINE_integer('epochs',1000,'')
-flags.DEFINE_float('lr',1*10**-4,'')
-flags.DEFINE_float('dropout',0.2,'')
+flags.DEFINE_float('lr',3*10**-4,'')
+flags.DEFINE_float('cls_dropout',0.25,'')
+flags.DEFINE_float('loc_dropout',0.15,'')
 flags.DEFINE_float('label_smoothing',0.05,'')
+flags.DEFINE_float('min_crop_size',0.1,'')
+flags.DEFINE_float('max_crop_size',0.3,'')
 
 flags.DEFINE_integer('num_prototypes',20,'')
 flags.DEFINE_integer('top_k',3,'')
@@ -60,7 +63,7 @@ def main(argv):
 
     TRAIN_IMAGES_PATH = "./images/train"
     VAL_IMAGES_PATH = "./images/val"
-    NUMBER_OF_TRAINING_IMAGES = len(glob.glob(TRAIN_IMAGES_PATH+"/puddle/*"))
+    NUMBER_OF_TRAINING_IMAGES = len(glob.glob(TRAIN_IMAGES_PATH+"/spills/*"))
     NUMBER_OF_VALIDATION_IMAGES = len(glob.glob(VAL_IMAGES_PATH+"/spills/*"))
     print("Num train:",NUMBER_OF_TRAINING_IMAGES)
     print("Num val:",NUMBER_OF_VALIDATION_IMAGES)
@@ -75,6 +78,7 @@ def main(argv):
     validation_generator = CustomDataGen(VAL_IMAGES_PATH, batch_size, train=False)
 
     spill_classifier.compile(
+        loss=tf.keras.losses.BinaryCrossentropy(),
         optimizer=optimizers.Adam(lr=FLAGS.lr)
     )
 
@@ -85,7 +89,7 @@ def main(argv):
         steps_per_epoch=NUMBER_OF_TRAINING_IMAGES // batch_size,
         epochs=epochs,
         validation_data=validation_generator,
-        validation_steps=NUMBER_OF_VALIDATION_IMAGES // 8,
+        validation_steps=NUMBER_OF_VALIDATION_IMAGES // 4,
         verbose=1,
         use_multiprocessing=False,
         workers=8,
