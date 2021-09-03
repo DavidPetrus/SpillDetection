@@ -42,11 +42,16 @@ flags.DEFINE_integer('top_k',3,'')
 flags.DEFINE_string('model_weights','','')
 flags.DEFINE_string('video','','')
 
+flags.DEFINE_float('cls_dropout',0.,'')
+flags.DEFINE_float('loc_dropout',0.,'')
+flags.DEFINE_float('min_crop_size',0.1,'')
+flags.DEFINE_float('max_crop_size',0.3,'')
+
 flags.DEFINE_float('gamma',300,'')
 flags.DEFINE_float('all_margin',0.25,'')
 
-height = 224
-width = 224
+image_size = 720
+crop_size = 224
 
 pred_thresh = 2
 diff_thresh = 3
@@ -66,50 +71,8 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
     """
 
     spill_classifier = CustomModel()
-    spill_classifier.build(input_shape=(None,224,224,3))
-    print(spill_classifier.prototype_layer.prototypes)
-
-    spill_classifier.load_weights("effnet_weights/"+FLAGS.model_weights+'.h5')
-    
-    print(spill_classifier.prototype_layer.prototypes)
-    print("initialize")
-
-    # select device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("device: %s" % device)
-
-    net_w = net_h = 480
-
-    #candidate_spill_categories = torch.tensor([22,28,29,44,61,105,110,121,129,138,142,143,148,23]).reshape(1,-1,1)
-    candidate_spill_categories = torch.tensor([22,29,44,61,105,110,121,129,138,142,143,148,23]).reshape(1,-1,1).to('cuda')
-    floor_cat = torch.tensor([4]).reshape(1,1,1).to('cuda')
-    # water, mirror, rug, sign, river, fountain, swimming_pool, food, lake, tray, screen, plate, glass, painting
-    top_k = 3
-
-    model = DPTSegmentationModel(
-        150,
-        path=model_path,
-        backbone="vitb_rn50_384",
-    )
-
-    transform = Compose(
-        [
-            Resize(
-                net_w,
-                net_h,
-                resize_target=None,
-                keep_aspect_ratio=True,
-                ensure_multiple_of=32,
-                resize_method="minimal",
-                image_interpolation_method=cv2.INTER_CUBIC,
-            ),
-            NormalizeImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            PrepareForNet(),
-        ]
-    )
-
-    model.eval()
-    model.to(device)
+    spill_classifier.build(input_shape=(None,image_size,image_size,3))
+    spill_classifier.load_weights("effnet_weights/"+FLAGS.model_weights+".h5")
 
     if not is_image:
         cap = cv2.VideoCapture(input_path)
@@ -129,87 +92,56 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             if count % 7 > 0:
                 continue
 
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) / 255.0
-            img_input = transform({"image": img})["image"]
+            img_h,img_w,_ = frame.shape
+            img = frame[img_h//2-image_size//2:img_h//2+image_size//2,img_w//2-image_size//2:img_w//2+image_size//2]
+            img = img/255.
+            img_tensor = tf.reshape(img,[1,image_size,image_size,3])
+            pred,theta = spill_classifier(img_tensor)
 
-            # compute
-            with torch.no_grad():
-                sample = torch.from_numpy(img_input).to(device).unsqueeze(0)
+            '''resized = ns_crop/255.
+            resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
+            resized = tf.image.resize(resized, [int(resized.shape[0]*2),int(resized.shape[0]*2)])
+            resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
+            #resized = tf.image.resize(resized, [224,224])
+            resized = tf.reshape(resized,(1,224,224,3))
+            ref_embd,ns_outp = spill_classifier(resized,training=False)
 
-                out = model.forward(sample)
+            sims_curr,curr_nn_idxs = tf.math.top_k(outp,k=1,sorted=False)
+            sims_ref,ref_nn_idxs = tf.math.top_k(ns_outp,k=1,sorted=False)'''
 
-                prediction = torch.nn.functional.interpolate(
-                    out, size=img.shape[:2], mode="bicubic", align_corners=False
-                )
-                max_pred = torch.argmax(prediction, dim=1, keepdim=True) + 1
-                max_pred = max_pred.squeeze().cpu().numpy()
-                
-                sorted_k = torch.argsort(prediction, dim=1, descending=True)[:,:top_k] + 1
-
-                spill_pix = (sorted_k.reshape(top_k,1,-1) == candidate_spill_categories).any(dim=1).any(dim=0)
-                floor_pix = (sorted_k[:,:1].reshape(1,-1) == 4).any(dim=0)
-                candidate_pix = torch.logical_and(spill_pix,floor_pix).reshape(img.shape[:2])
-                candidate_pix = candidate_pix.long()
-                seg_mask = candidate_pix.cpu().numpy() + 2
-                candidate_pix = candidate_pix.cpu().numpy() * 255
-
-            # output
-            #filename = os.path.join(
-            #    output_path, os.path.splitext(os.path.basename(img_name))[0]
-            #)
-            #util.io.write_segm_img(filename, img, seg_mask, alpha=0.5)
+            #conf = outp[:,spill].numpy()[0]
+            #pred = outp[0,0]
+            #diff = pred-ns_outp[0,0]
+            #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
             
-            img = frame
-            #motion_bboxes = motion_det.detect(frame)
-            motion_bboxes = []
-            crops, no_spill_crops, bboxes = get_spill_crops(frame.copy(), no_spill_frame.copy(), candidate_pix.astype(np.uint8), motion_bboxes)
-            for crop,ns_crop,bbox in zip(crops,no_spill_crops,bboxes):
-                resized = crop/255.
-                resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
-                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
-                #resized = tf.image.resize(resized, [224,224])
-                resized = tf.reshape(resized,(1,224,224,3))
-                outp = spill_classifier(resized,training=False)
+            #logits_str = "SimCurr_{:.2f}_{}_SimRef_{:.2f}_{}".format(sims_curr[0,0].numpy(),curr_nn_idxs[0,0].numpy(),sims_ref[0,0].numpy(),ref_nn_idxs[0,0].numpy())
+            logits_str = "{:.2f}".format(pred[0,0].numpy())
 
-                resized = ns_crop/255.
-                resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
-                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
-                #resized = tf.image.resize(resized, [224,224])
-                resized = tf.reshape(resized,(1,224,224,3))
-                ns_outp = spill_classifier(resized,training=False)
+            theta = theta[0].numpy()
+            cr_x = theta[2]
+            cr_y = theta[4]
+            cr_size = theta[0]
+            bbox = [int(cr_x*0.5*image_size + 0.5*image_size - 0.5*image_size*cr_size),
+                    int(cr_y*0.5*image_size + 0.5*image_size - 0.5*image_size*cr_size),
+                    int(cr_x*0.5*image_size + 0.5*image_size + 0.5*image_size*cr_size),
+                    int(cr_y*0.5*image_size + 0.5*image_size + 0.5*image_size*cr_size)]
 
-                embds = tf.concat([outp,ns_outp], axis=0)
-                embds = tf.nn.l2_normalize(embds, axis=1)
-                #sims_all = tf.matmul(embds,embds,transpose_b=True)
-                prototypes = tf.nn.l2_normalize(spill_classifier.prototypes, axis=1)
-                sims_all = tf.matmul(embds,prototypes)
-                sims_top_k,nn_idxs = tf.math.top_k(sims_all,k=1,sorted=False)
-
-                #conf = outp[:,spill].numpy()[0]
-                #pred = outp[0,0]
-                #diff = pred-ns_outp[0,0]
-                #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
-                
-                logits_str = "SimP_{:.2f}_{}_SimN_{:.2f}_{}".format(sims_top_k[0,0].numpy(),nn_idxs[0,0].numpy(),sims_top_k[1,0].numpy(),nn_idxs[1,0].numpy())
-
-                if False:
-                    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
-                    cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                    #cv2.putText(img, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                else:
-                    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
-                    cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
-                    #cv2.putText(img, "No Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+            if pred[0,0].numpy() > 0.5:
+                cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
+                cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                #cv2.putText(img, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+            else:
+                cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
+                cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                #cv2.putText(img, "No Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
 
 
-            for bbox in motion_bboxes:
-                cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
+            #for bbox in motion_bboxes:
+            #    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
             
-            writer.write(img)
+            #writer.write(img)
             cv2.imshow('a',img)
-            if cv2.waitKey(0) & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
     writer.release()

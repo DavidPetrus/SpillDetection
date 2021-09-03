@@ -58,10 +58,10 @@ class CustomDataGen(tf.keras.utils.Sequence):
         
         self.train = train
         if self.train:
-            self.n = len(self.spill_images)
+            self.n = len(self.spill_images) // self.batch_size
         else:
             self.batch_size = batch_size//2
-            self.n = len(self.spill_images)
+            self.n = len(self.spill_images) // self.batch_size
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
@@ -112,21 +112,50 @@ class CustomDataGen(tf.keras.utils.Sequence):
                     cat = cats[i_ix]
                     bbox = bboxes[i_ix]
                     lux,luy,rbx,rby = bbox
+                    bb_w = rbx-lux
+                    bb_h = rby-luy
                     cr_l = np.random.randint(0,lux+1)
                     cr_t = np.random.randint(0,luy+1)
                     cr_r = np.random.randint(rbx,img_w)
                     cr_b = np.random.randint(rby,img_h)
+                    
+                    crop_size = min(cr_r-cr_l,cr_b-cr_t)
+                    if crop_size < bb_w:
+                        crop_size = cr_r-cr_l
+                        if luy > img_h-1-rby:
+                            cr_t = max(cr_b-crop_size,0)
+                        else:
+                            cr_b = min(cr_t+crop_size,img_h-1)
+                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
+                    elif crop_size < bb_h:
+                        crop_size = cr_b-cr_t
+                        if lux > img_w-1-rbx:
+                            cr_l = max(cr_r-crop_size,0)
+                        else:
+                            cr_r = min(cr_l+crop_size,img_w-1)
+                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
+
+                    if cr_r-cr_l > crop_size:
+                        if lux < img_w-1-rbx:
+                            cr_l = np.random.randint(max(0,rbx-crop_size),min(lux+1,img_w-crop_size))
+                            cr_r = cr_l+crop_size
+                        else:
+                            cr_r = np.random.randint(max(rbx,crop_size),min(img_w,lux+crop_size+1))
+                            cr_l = cr_r-crop_size
+                    elif cr_b-cr_t > crop_size:
+                        if luy < img_h-1-rby:
+                            cr_t = np.random.randint(max(0,rby-crop_size),min(luy+1,img_h-crop_size))
+                            cr_b = cr_t+crop_size
+                        else:
+                            cr_b = np.random.randint(max(rby,crop_size),min(img_h,luy+crop_size+1))
+                            cr_t = cr_b-crop_size
+
                     crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
-                    crop_size = min(crop_dim[2]-crop_dim[0],crop_dim[3]-crop_dim[1])
-                    max_diff = np.argmax([lux-cr_l,luy-cr_t,cr_r-rbx,cr_b-rby])
-                    if max_diff >= 2:
-                        crop_dim[max_diff] = crop_dim[max_diff-2]+crop_size
-                    else:
-                        crop_dim[max_diff] = crop_dim[max_diff+2]-crop_size
 
                     crop = img[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
                     spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
-                    new_size = np.random.randint(int(img_size*self.vid_resize_range[img_size][0]),int(img_size*self.vid_resize_range[img_size][1]))
+
+                    new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]),int(crop_size*self.vid_resize_range[img_size][1]))
                 elif dataset == 'puddle':
                     if cat == 0:
                         crop_size = np.random.randint(int(0.8*img_size),img_size+1)
@@ -142,6 +171,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 if dataset != 'video':
                     crop = tf.image.random_crop(img,(crop_size,crop_size,3))
                 #crop = tfa.image.rotate(crop,np.random.randint(-20,20))
+
                 img = tf.image.resize(crop, [new_size,new_size])
                 spill_mask = tf.image.resize(spill_mask, [new_size,new_size], method='nearest')
 
@@ -254,7 +284,6 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 neg_puddle.append(imgs[1])
                 neg_puddle.append(imgs[2])'''
 
-            #if ix < 8:
             imgs,spill_masks = self.__get_image__(index+ix, dataset='spill')
             pos_images.append(imgs[0])
             neg_images.append(imgs[1])

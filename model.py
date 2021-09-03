@@ -56,11 +56,14 @@ class CustomModel(tf.keras.Model):
 
         self.resize_layer = layers.Resizing(224,224)
 
+        self.min_spill_frac = FLAGS.min_spill_frac
+        self.locnet_aug = FLAGS.locnet_aug
+
         #self.loss = tf.keras.losses.BinaryCrossentropy()
 
         self.zeros32 = tf.zeros(32,dtype=tf.float32)
         self.zeros20 = tf.zeros(20,dtype=tf.float32)
-        self.zeros = self.zeros32
+        self.zeros = tf.zeros(32,dtype=tf.float32)
 
     def call(self, inputs, training=False):
         x = self.resnet_bb(inputs, False)['final_avg_pool']
@@ -75,10 +78,11 @@ class CustomModel(tf.keras.Model):
         cr_y = crop_pred[:,2]*1.8 - 0.9
         if training:
             crop_size = crop_size + (np.random.random()*0.06 - 0.03)
-            cr_x = cr_x + (np.random.random()*0.06 - 0.03)
-            cr_y = cr_y + (np.random.random()*0.06 - 0.03)
+            cr_x = cr_x + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
+            cr_y = cr_y + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
 
         theta = tf.stack([crop_size,self.zeros,cr_x,self.zeros,cr_y,crop_size])
+        #theta = tf.stack([self.zeros+0.3,self.zeros,self.zeros,self.zeros,self.zeros,self.zeros+0.3])
         theta = tf.transpose(theta)
         crops = spatial_transform(inputs,theta)
 
@@ -118,8 +122,8 @@ class CustomModel(tf.keras.Model):
             total_loss = self.compiled_loss(y,pred)
 
             mask_crops = spatial_transform(masks, theta)
-            spill_frac = tf.reduce_mean(mask_crops[:-20])
-            total_loss = total_loss + tf.nn.relu(0.3-spill_frac)
+            spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2])
+            total_loss = total_loss + 10*tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac))
 
             '''_,sims_all = self(X, training=True)  # Forward pass
             sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
@@ -153,7 +157,7 @@ class CustomModel(tf.keras.Model):
 
         loss_tracker.update_state(total_loss)
         acc_tracker.update_state(y,pred)
-        locnet_tracker.update_state(spill_frac)
+        locnet_tracker.update_state(tf.reduce_mean(spill_frac[:4]))
         #all_tracker.update_state(loss_all)
         #puddle_tracker.update_state(loss_puddle)
         #video_tracker.update_state(loss_video)
@@ -171,7 +175,7 @@ class CustomModel(tf.keras.Model):
         total_loss = self.compiled_loss(y,pred)
 
         mask_crops = spatial_transform(masks, theta)
-        spill_frac = tf.reduce_mean(mask_crops[:-12],axis=[1,2])
+        spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2])
 
         '''_,sims_all = self(X, training=False)  # Forward pass
         sims_top_k = tf.math.top_k(sims_all,k=1,sorted=False).values
@@ -195,7 +199,7 @@ class CustomModel(tf.keras.Model):
 
         loss_tracker.update_state(total_loss)
         acc_tracker.update_state(y,pred)
-        locnet_tracker.update_state(tf.reduce_mean(spill_frac))
+        locnet_tracker.update_state(tf.reduce_mean(spill_frac[:4]))
         #all_tracker.update_state(loss_all)
         #puddle_tracker.update_state(loss_puddle)
         #video_tracker.update_state(loss_video)
