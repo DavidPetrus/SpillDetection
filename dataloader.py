@@ -299,7 +299,16 @@ class CustomDataGen(tf.keras.utils.Sequence):
 
         X = tf.stack(pos_images+neg_images)
         #lab = tf.reshape(tf.concat([self.ones[:len(pos_images)],self.zeros[:len(neg_images)]],axis=0),[-1,1])
-        lab = tf.stack(pos_masks+neg_masks)
+
+        loc_reg_pts = []
+        for m in pos_masks[:4]:
+            spill_pix = tf.where(m)[:,:2] # n,2
+            sample_idxs = np.random.choice(spill_pix.shape[0],12,replace=False)
+            spill_pix = tf.gather(spill_pix,sample_idxs,axis=0)
+            loc_reg_pts.append(spill_pix)
+
+        loc_reg_pts = tf.cast(tf.stack(loc_reg_pts),dtype=tf.float32)
+        lab = (tf.stack(pos_masks+neg_masks), loc_reg_pts)
 
         return X,lab
     

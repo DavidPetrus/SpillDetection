@@ -11,6 +11,7 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 loss_tracker = tf.keras.metrics.Mean(name="loss")
+loc_loss_tracker = tf.keras.metrics.Mean(name="loc_loss")
 locnet_tracker = tf.keras.metrics.Mean(name="locnet_frac")
 acc_tracker = tf.keras.metrics.BinaryAccuracy()
 
@@ -77,7 +78,7 @@ class CustomModel(tf.keras.Model):
         cr_x = crop_pred[:,1]*1.8 - 0.9
         cr_y = crop_pred[:,2]*1.8 - 0.9
         if training:
-            crop_size = crop_size + (np.random.random()*0.06 - 0.03)
+            crop_size = crop_size + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
             cr_x = cr_x + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
             cr_y = cr_y + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
 
@@ -112,18 +113,26 @@ class CustomModel(tf.keras.Model):
         # on what you pass to `fit()`.
         self.zeros = self.zeros32
 
-        X,masks = data
+        X,lab = data
+        masks,loc_reg_pts = lab
         y = tf.reduce_max(masks,axis=[1,2])
 
         with tf.GradientTape() as tape:
 
             pred,theta = self(X,training=True)
 
-            total_loss = self.compiled_loss(y,pred)
+            cls_loss = self.compiled_loss(y,pred)
 
-            mask_crops = spatial_transform(masks, theta)
-            spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2])
-            total_loss = total_loss + 10*tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac))
+            mask_crops = spatial_transform(masks[:4], theta[:4])
+            spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2,3])
+            t_x = theta[:4,2:3]
+            t_y = theta[:4,4:5]
+            x_diff = tf.reduce_mean(t_x-loc_reg_pts[:,:,1],axis=1)
+            y_diff = tf.reduce_mean(t_y-loc_reg_pts[:,:,0],axis=1)
+            loc_loss = x_diff**2 + y_diff**2
+            loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
+
+            total_loss = cls_loss + loc_loss
 
             '''_,sims_all = self(X, training=True)  # Forward pass
             sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
@@ -155,7 +164,8 @@ class CustomModel(tf.keras.Model):
         # Update weights
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
-        loss_tracker.update_state(total_loss)
+        loss_tracker.update_state(cls_loss)
+        loc_loss_tracker.update_state(loc_loss)
         acc_tracker.update_state(y,pred)
         locnet_tracker.update_state(tf.reduce_mean(spill_frac[:4]))
         #all_tracker.update_state(loss_all)
@@ -163,12 +173,13 @@ class CustomModel(tf.keras.Model):
         #video_tracker.update_state(loss_video)
         #return {"loss": loss_tracker.result(), "all_loss": all_tracker.result(), "puddle_loss": puddle_tracker.result(), "video_loss": video_tracker.result()}
 
-        return {"loss": loss_tracker.result(),"acc": acc_tracker.result(), "spill_frac":locnet_tracker.result()}
+        return {"loss": loss_tracker.result(),"acc": acc_tracker.result(), "spill_frac":locnet_tracker.result(), "loc_loss":loc_loss_tracker.result()}
 
     def test_step(self, data):
         self.zeros = self.zeros20
 
-        X,masks = data
+        X,lab = data
+        masks,loc_reg_pts = lab
         y = tf.reduce_max(masks,axis=[1,2])
 
         pred,theta = self(X,training=True)
@@ -176,6 +187,14 @@ class CustomModel(tf.keras.Model):
 
         mask_crops = spatial_transform(masks, theta)
         spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2])
+
+        t_x = theta[:,2:3]
+        t_y = theta[:,4:5]
+        x_diff = tf.reduce_sum(t_x-loc_reg_pts[:,1])
+        y_diff = tf.reduce_sum(t_y-loc_reg_pts[:,0])
+        loc_loss = x_diff**2 + y_diff**2
+
+        total_loss = total_loss + tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac))*loc_loss
 
         '''_,sims_all = self(X, training=False)  # Forward pass
         sims_top_k = tf.math.top_k(sims_all,k=1,sorted=False).values
@@ -205,7 +224,7 @@ class CustomModel(tf.keras.Model):
         #video_tracker.update_state(loss_video)
         #return {"loss": loss_tracker.result(), "all_loss": all_tracker.result(), "puddle_loss": puddle_tracker.result(), "video_loss": video_tracker.result()}
 
-        return {"loss": loss_tracker.result(),"acc": acc_tracker.result(), "spill_frac":locnet_tracker.result()}
+        return {"loss": loss_tracker.result(),"acc": acc_tracker.result(), "spill_frac":locnet_tracker.result(), "loc_loss":loc_loss_tracker.result()}
 
     @property
     def metrics(self):
@@ -216,7 +235,7 @@ class CustomModel(tf.keras.Model):
         # `reset_states()` yourself at the time of your choosing.
         #return [loss_tracker, all_tracker, puddle_tracker, video_tracker]
 
-        return [loss_tracker,acc_tracker,locnet_tracker]
+        return [loss_tracker,acc_tracker,locnet_tracker,loc_loss_tracker]
 
     def circle_loss(self, sp, sn, margin):
         """ use within-class similarity and between-class similarity for loss
