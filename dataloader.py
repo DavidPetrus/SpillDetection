@@ -44,6 +44,8 @@ class CustomDataGen(tf.keras.utils.Sequence):
         self.zeros = tf.zeros(128)
         self.ones = tf.ones(128)
 
+        self.num_spill_samples = 30
+
         self.videos = glob.glob(directory+'/spill_vids/*.mp4') + glob.glob(directory+'/spill_vids/*.avi')
 
         self.vid_resize_range = {480: (1,2), 608: (0.6,1.5), 720: (0.5,1.5), 1080: (0.6,1.5)}
@@ -155,7 +157,8 @@ class CustomDataGen(tf.keras.utils.Sequence):
                     crop = img[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
                     spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
 
-                    new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]),int(crop_size*self.vid_resize_range[img_size][1]))
+                    new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]), \
+                                                 min(int(crop_size*self.vid_resize_range[img_size][1]),self.input_size))
                 elif dataset == 'puddle':
                     if cat == 0:
                         crop_size = np.random.randint(int(0.8*img_size),img_size+1)
@@ -183,6 +186,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 spill_mask = tf.image.resize_with_crop_or_pad(spill_mask,self.input_size,self.input_size)
             else:
                 if dataset == 'video':
+                    cat = cats[i_ix]
                     frame_bboxes = all_bboxes[i_ix]
                     for bb in frame_bboxes:
                         spill_mask[bb[1]:bb[3],bb[0]:bb[2]] = 1.
@@ -200,6 +204,12 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 img = tf.image.resize_with_crop_or_pad(img,self.input_size,self.input_size)
                 spill_mask = tf.image.resize_with_crop_or_pad(spill_mask,self.input_size,self.input_size)
                 img = tf.cast(img,dtype=tf.float32)
+
+            if cat == 0 and spill_mask.numpy().max() == 0:
+                if dataset=='video':
+                    print(i_ix,self.train,crop_dim,bbox,spill_mask.shape,frame_bboxes)
+                else:
+                    print(i_ix,self.train,spill_mask.shape,crop_size,new_size)
 
             imgs.append(img)
             spill_masks.append(spill_mask)
@@ -223,7 +233,6 @@ class CustomDataGen(tf.keras.utils.Sequence):
 
         no_spill_frames = []
         spill_frames = defaultdict(list)
-        spill_bboxes = []
         for line in lines:
             if 'no_spill' in line:
                 fr,lab = line.split(' ')
@@ -301,13 +310,13 @@ class CustomDataGen(tf.keras.utils.Sequence):
         #lab = tf.reshape(tf.concat([self.ones[:len(pos_images)],self.zeros[:len(neg_images)]],axis=0),[-1,1])
 
         loc_reg_pts = []
-        for m in pos_masks[:4]:
+        for f_ix,m in enumerate(pos_masks[:4]):
             spill_pix = tf.where(m)[:,:2] # n,2
-            sample_idxs = np.random.choice(spill_pix.shape[0],12,replace=False)
-            spill_pix = tf.gather(spill_pix,sample_idxs,axis=0)
-            loc_reg_pts.append(spill_pix)
+            sample_idxs = np.random.choice(spill_pix.shape[0],self.num_spill_samples,replace=False)
+            spill_pix = tf.cast(tf.gather(spill_pix,sample_idxs,axis=0),dtype=tf.float32)
+            loc_reg_pts.append(2*spill_pix/self.input_size - 1)
 
-        loc_reg_pts = tf.cast(tf.stack(loc_reg_pts),dtype=tf.float32)
+        loc_reg_pts = tf.stack(loc_reg_pts)
         lab = (tf.stack(pos_masks+neg_masks), loc_reg_pts)
 
         return X,lab

@@ -59,6 +59,7 @@ class CustomModel(tf.keras.Model):
 
         self.min_spill_frac = FLAGS.min_spill_frac
         self.locnet_aug = FLAGS.locnet_aug
+        self.loc_coeff = FLAGS.loc_coeff
 
         #self.loss = tf.keras.losses.BinaryCrossentropy()
 
@@ -82,7 +83,7 @@ class CustomModel(tf.keras.Model):
             cr_x = cr_x + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
             cr_y = cr_y + (np.random.random()*self.locnet_aug*2 - self.locnet_aug)
 
-        theta = tf.stack([crop_size,self.zeros,cr_x,self.zeros,cr_y,crop_size])
+        theta = tf.stack([crop_size,self.zeros,cr_x,self.zeros,crop_size,cr_y])
         #theta = tf.stack([self.zeros+0.3,self.zeros,self.zeros,self.zeros,self.zeros,self.zeros+0.3])
         theta = tf.transpose(theta)
         crops = spatial_transform(inputs,theta)
@@ -123,16 +124,16 @@ class CustomModel(tf.keras.Model):
 
             cls_loss = self.compiled_loss(y,pred)
 
-            mask_crops = spatial_transform(masks[:4], theta[:4])
-            spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2,3])
+            mask_crops = spatial_transform(tf.stop_gradient(masks[:4]), theta[:4])
+            spill_frac = tf.reduce_mean(mask_crops,axis=[1,2,3])
             t_x = theta[:4,2:3]
-            t_y = theta[:4,4:5]
+            t_y = theta[:4,5:6]
             x_diff = tf.reduce_mean(t_x-loc_reg_pts[:,:,1],axis=1)
             y_diff = tf.reduce_mean(t_y-loc_reg_pts[:,:,0],axis=1)
             loc_loss = x_diff**2 + y_diff**2
             loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
 
-            total_loss = cls_loss + loc_loss
+            total_loss = cls_loss + self.loc_coeff*loc_loss
 
             '''_,sims_all = self(X, training=True)  # Forward pass
             sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
@@ -167,7 +168,7 @@ class CustomModel(tf.keras.Model):
         loss_tracker.update_state(cls_loss)
         loc_loss_tracker.update_state(loc_loss)
         acc_tracker.update_state(y,pred)
-        locnet_tracker.update_state(tf.reduce_mean(spill_frac[:4]))
+        locnet_tracker.update_state(tf.reduce_mean(spill_frac))
         #all_tracker.update_state(loss_all)
         #puddle_tracker.update_state(loss_puddle)
         #video_tracker.update_state(loss_video)
@@ -183,18 +184,19 @@ class CustomModel(tf.keras.Model):
         y = tf.reduce_max(masks,axis=[1,2])
 
         pred,theta = self(X,training=True)
-        total_loss = self.compiled_loss(y,pred)
+        cls_loss = self.compiled_loss(y,pred)
 
-        mask_crops = spatial_transform(masks, theta)
-        spill_frac = tf.reduce_mean(mask_crops[:4],axis=[1,2])
+        mask_crops = spatial_transform(masks[:4], theta[:4])
+        spill_frac = tf.reduce_mean(mask_crops,axis=[1,2])
 
-        t_x = theta[:,2:3]
-        t_y = theta[:,4:5]
-        x_diff = tf.reduce_sum(t_x-loc_reg_pts[:,1])
-        y_diff = tf.reduce_sum(t_y-loc_reg_pts[:,0])
+        t_x = theta[:4,2:3]
+        t_y = theta[:4,5:6]
+        x_diff = tf.reduce_mean(t_x-loc_reg_pts[:,:,1],axis=1)
+        y_diff = tf.reduce_mean(t_y-loc_reg_pts[:,:,0],axis=1)
         loc_loss = x_diff**2 + y_diff**2
+        loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
 
-        total_loss = total_loss + tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac))*loc_loss
+        total_loss = cls_loss + self.loc_coeff*loc_loss
 
         '''_,sims_all = self(X, training=False)  # Forward pass
         sims_top_k = tf.math.top_k(sims_all,k=1,sorted=False).values
@@ -216,9 +218,10 @@ class CustomModel(tf.keras.Model):
 
         total_loss = loss_all + FLAGS.puddle_coeff*loss_puddle + FLAGS.vid_coeff*loss_video'''
 
-        loss_tracker.update_state(total_loss)
+        loss_tracker.update_state(cls_loss)
+        loc_loss_tracker.update_state(loc_loss)
         acc_tracker.update_state(y,pred)
-        locnet_tracker.update_state(tf.reduce_mean(spill_frac[:4]))
+        locnet_tracker.update_state(tf.reduce_mean(spill_frac))
         #all_tracker.update_state(loss_all)
         #puddle_tracker.update_state(loss_puddle)
         #video_tracker.update_state(loss_video)

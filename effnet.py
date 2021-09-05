@@ -42,9 +42,11 @@ flags.DEFINE_integer('epochs',1000,'')
 flags.DEFINE_float('lr',3*10**-4,'')
 flags.DEFINE_float('cls_dropout',0.25,'')
 flags.DEFINE_float('loc_dropout',0.15,'')
-flags.DEFINE_float('label_smoothing',0.05,'')
 flags.DEFINE_float('min_crop_size',0.1,'')
 flags.DEFINE_float('max_crop_size',0.3,'')
+flags.DEFINE_float('min_spill_frac',0.3,'')
+flags.DEFINE_float('locnet_aug',0.03,'')
+flags.DEFINE_float('loc_coeff',10.,'')
 
 flags.DEFINE_integer('num_prototypes',20,'')
 flags.DEFINE_integer('top_k',3,'')
@@ -73,6 +75,8 @@ def main(argv):
     epochs = FLAGS.epochs
 
     spill_classifier = CustomModel()
+    spill_classifier.build(input_shape=(None,720,720,3))
+    #spill_classifier.load_weights("effnet_weights/"+'2Sep2.h5')
 
     train_generator = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, train=True)
     validation_generator = CustomDataGen(VAL_IMAGES_PATH, batch_size, train=False)
@@ -83,6 +87,10 @@ def main(argv):
     )
 
     checkpoint = ModelCheckpoint('effnet_weights/'+FLAGS.exp+'.h5', monitor='val_loss', verbose=1, save_weights_only=True, save_best_only=False, mode='min', period=1)
+
+    #for epoch in range(1000):
+    #    for data in train_generator:
+    #        results = spill_classifier.train_step(data)
 
     history = spill_classifier.fit(
         train_generator,
