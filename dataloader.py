@@ -6,6 +6,10 @@ import tensorflow_addons as tfa
 import glob
 from collections import defaultdict
 
+from absl import flags, app
+
+FLAGS = flags.FLAGS
+
 class CustomDataGen(tf.keras.utils.Sequence):
     
     def __init__(self, directory, batch_size,input_size=(224, 224, 3),train=True):
@@ -39,7 +43,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
             self.neg_frames[vid] = not_spill_frames
 
         self.batch_size = batch_size
-        self.input_size = 720
+        self.input_size = FLAGS.input_size
 
         self.zeros = tf.zeros(128)
         self.ones = tf.ones(128)
@@ -109,7 +113,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
                 elif dataset == 'video':
                     frame_bboxes = all_bboxes[i_ix]
                     for bb in frame_bboxes:
-                        spill_mask[bb[1]:bb[3],bb[0]:bb[2]] = 1.
+                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
 
                     cat = cats[i_ix]
                     bbox = bboxes[i_ix]
@@ -157,8 +161,11 @@ class CustomDataGen(tf.keras.utils.Sequence):
                     crop = img[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
                     spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
 
-                    new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]), \
-                                                 min(int(crop_size*self.vid_resize_range[img_size][1]),self.input_size))
+                    if int(crop_size*self.vid_resize_range[img_size][0]) < self.input_size:
+                        new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]), \
+                                                     min(int(crop_size*self.vid_resize_range[img_size][1]),self.input_size))
+                    else:
+                        new_size = self.input_size
                 elif dataset == 'puddle':
                     if cat == 0:
                         crop_size = np.random.randint(int(0.8*img_size),img_size+1)
@@ -189,7 +196,7 @@ class CustomDataGen(tf.keras.utils.Sequence):
                     cat = cats[i_ix]
                     frame_bboxes = all_bboxes[i_ix]
                     for bb in frame_bboxes:
-                        spill_mask[bb[1]:bb[3],bb[0]:bb[2]] = 1.
+                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
 
                 img = img[img_h//2-img_size//2:img_h//2+img_size//2,img_w//2-img_size//2:img_w//2+img_size//2]
                 spill_mask = spill_mask[img_h//2-img_size//2:img_h//2+img_size//2,img_w//2-img_size//2:img_w//2+img_size//2]

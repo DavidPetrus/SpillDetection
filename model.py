@@ -39,7 +39,9 @@ class CustomModel(tf.keras.Model):
         self.min_crop_size = FLAGS.min_crop_size
         self.max_crop_size = FLAGS.max_crop_size
 
-        self.resnet_bb = tf.keras.models.load_model("/home/petrus/pretrained_models/simclrV2_resnet50x2")
+        #self.resnet_bb = tf.keras.models.load_model("/home/petrus/pretrained_models/simclrV2_resnet50x2")
+        self.resnet_bb = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(FLAGS.input_size,FLAGS.input_size,3))
+        #self.loc_conv1 = tf.keras.layers.Conv2D()
         self.loc_hid = tf.keras.layers.Dense(64,activation='relu')
         self.loc_dropout = layers.Dropout(rate=FLAGS.loc_dropout)
         self.loc_out = tf.keras.layers.Dense(3,activation='sigmoid')
@@ -55,8 +57,6 @@ class CustomModel(tf.keras.Model):
         self.cls_dropout = layers.Dropout(rate=FLAGS.cls_dropout)
         self.final = layers.Dense(1, activation="sigmoid", name="fc_out")
 
-        self.resize_layer = layers.Resizing(224,224)
-
         self.min_spill_frac = FLAGS.min_spill_frac
         self.locnet_aug = FLAGS.locnet_aug
         self.loc_coeff = FLAGS.loc_coeff
@@ -68,7 +68,8 @@ class CustomModel(tf.keras.Model):
         self.zeros = tf.zeros(32,dtype=tf.float32)
 
     def call(self, inputs, training=False):
-        x = self.resnet_bb(inputs, False)['final_avg_pool']
+        x = self.resnet_bb(inputs, training=training)
+        x = tf.reduce_mean(x,axis=[1,2])
 
         x = self.loc_hid(x)
         if training:
@@ -86,16 +87,12 @@ class CustomModel(tf.keras.Model):
         theta = tf.stack([crop_size,self.zeros,cr_x,self.zeros,crop_size,cr_y])
         #theta = tf.stack([self.zeros+0.3,self.zeros,self.zeros,self.zeros,self.zeros,self.zeros+0.3])
         theta = tf.transpose(theta)
-        crops = spatial_transform(inputs,theta)
+        crops = spatial_transform(inputs,theta,(224,224))
 
         if training:
-            resized_pos = self.resize_layer(crops[:-20])
-            resized_neg = tf.stop_gradient(self.resize_layer(crops[-20:]))
-            resized = tf.concat([resized_pos,resized_neg],axis=0)
-        else:
-            resized = self.resize_layer(crops)
+            crops = tf.concat([crops[:-20],tf.stop_gradient(crops[-20:])],axis=0)
 
-        x = self.conv_base(resized, training=training)
+        x = self.conv_base(crops, training=training)
         x = self.max_pool(x)
         '''x = self.proj_head(x)
 
@@ -124,16 +121,17 @@ class CustomModel(tf.keras.Model):
 
             cls_loss = self.compiled_loss(y,pred)
 
-            mask_crops = spatial_transform(tf.stop_gradient(masks[:4]), theta[:4])
+            mask_crops = spatial_transform(masks[:4], theta[:4])
             spill_frac = tf.reduce_mean(mask_crops,axis=[1,2,3])
-            t_x = theta[:4,2:3]
+            '''t_x = theta[:4,2:3]
             t_y = theta[:4,5:6]
             x_diff = tf.reduce_mean(t_x-loc_reg_pts[:,:,1],axis=1)
             y_diff = tf.reduce_mean(t_y-loc_reg_pts[:,:,0],axis=1)
             loc_loss = x_diff**2 + y_diff**2
-            loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
+            w_loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)'''
+            w_loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac))
 
-            total_loss = cls_loss + self.loc_coeff*loc_loss
+            total_loss = cls_loss + self.loc_coeff*w_loc_loss
 
             '''_,sims_all = self(X, training=True)  # Forward pass
             sims_top_k = tf.math.top_k(sims_all,k=self.top_k,sorted=False).values
@@ -166,7 +164,7 @@ class CustomModel(tf.keras.Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
         loss_tracker.update_state(cls_loss)
-        loc_loss_tracker.update_state(loc_loss)
+        loc_loss_tracker.update_state(w_loc_loss)
         acc_tracker.update_state(y,pred)
         locnet_tracker.update_state(tf.reduce_mean(spill_frac))
         #all_tracker.update_state(loss_all)
@@ -183,20 +181,20 @@ class CustomModel(tf.keras.Model):
         masks,loc_reg_pts = lab
         y = tf.reduce_max(masks,axis=[1,2])
 
-        pred,theta = self(X,training=True)
+        pred,theta = self(X,training=False)
         cls_loss = self.compiled_loss(y,pred)
 
         mask_crops = spatial_transform(masks[:4], theta[:4])
-        spill_frac = tf.reduce_mean(mask_crops,axis=[1,2])
+        spill_frac = tf.reduce_mean(mask_crops,axis=[1,2,3])
 
         t_x = theta[:4,2:3]
         t_y = theta[:4,5:6]
         x_diff = tf.reduce_mean(t_x-loc_reg_pts[:,:,1],axis=1)
         y_diff = tf.reduce_mean(t_y-loc_reg_pts[:,:,0],axis=1)
         loc_loss = x_diff**2 + y_diff**2
-        loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
+        w_loc_loss = tf.reduce_sum(tf.nn.relu(self.min_spill_frac-spill_frac)*loc_loss)
 
-        total_loss = cls_loss + self.loc_coeff*loc_loss
+        total_loss = cls_loss + self.loc_coeff*w_loc_loss
 
         '''_,sims_all = self(X, training=False)  # Forward pass
         sims_top_k = tf.math.top_k(sims_all,k=1,sorted=False).values
@@ -219,7 +217,7 @@ class CustomModel(tf.keras.Model):
         total_loss = loss_all + FLAGS.puddle_coeff*loss_puddle + FLAGS.vid_coeff*loss_video'''
 
         loss_tracker.update_state(cls_loss)
-        loc_loss_tracker.update_state(loc_loss)
+        loc_loss_tracker.update_state(w_loc_loss)
         acc_tracker.update_state(y,pred)
         locnet_tracker.update_state(tf.reduce_mean(spill_frac))
         #all_tracker.update_state(loss_all)
