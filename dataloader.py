@@ -1,18 +1,21 @@
 import numpy as np
 import random
 import cv2
-import tensorflow as tf
-import tensorflow_addons as tfa
+import torch
+import torchvision
+import torch.nn.functional as F
 import glob
 from collections import defaultdict
+
+from PIL import Image
 
 from absl import flags, app
 
 FLAGS = flags.FLAGS
 
-class CustomDataGen(tf.keras.utils.Sequence):
+class CustomDataGen(torch.utils.data.Dataset):
     
-    def __init__(self, directory, batch_size,input_size=(224, 224, 3),train=True):
+    def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True):
         
         self.spill_images = glob.glob(directory+'/spills/*')
         self.not_spill_images = glob.glob(directory+'/not_spills/*')
@@ -30,6 +33,13 @@ class CustomDataGen(tf.keras.utils.Sequence):
         self.gallon = [vid for vid in self.vids if 'gallon' in vid]
         self.rds = [vid for vid in self.vids if not 'gallon' in vid]
 
+        self.preprocess = preprocess
+        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(3,4)],'not_spill':[(3,5),(4,7),(5,8),(6,10)], \
+                          'gallon':[(2,3),(3,5),(4,7),(5,8)],'react':[(2,3),(3,5),(4,6)],'drinks':[(3,5),(4,7),(5,8)], \
+                          'store':[(3,5),(4,7),(5,8)],'val_vid':[(3,5),(4,7),(5,8),(6,10)]}
+        self.num_patches = {'spill':[1,2,4,3],'not_spill':[15,14,10,11],'gallon':[6,8,8,8],'react':[6,10,14], \
+                            'drinks':[10,10,10],'store':[10,10,10],'val_vid':[5,5,10,10]}
+
         self.vid_frames = {}
         self.pos_frames = {}
         self.neg_frames = {}
@@ -45,8 +55,11 @@ class CustomDataGen(tf.keras.utils.Sequence):
         self.batch_size = batch_size
         self.input_size = FLAGS.input_size
 
-        self.zeros = tf.zeros(128)
-        self.ones = tf.ones(128)
+        self.color_aug = torchvision.transforms.ColorJitter(0.4,0.4,0.4,0.1)
+        self.num_crops = {}
+
+        self.zeros = torch.zeros(1024)
+        self.ones = torch.ones(1024)
 
         self.num_spill_samples = 30
 
@@ -64,52 +77,58 @@ class CustomDataGen(tf.keras.utils.Sequence):
         
         self.train = train
         if self.train:
-            self.n = len(self.spill_images) // self.batch_size
+            self.n = len(self.spill_images)
         else:
             self.batch_size = batch_size//2
-            self.n = len(self.spill_images) // self.batch_size
+            self.n = len(self.spill_images)
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
         if dataset == 'video':
-            frames,bboxes,cats,all_bboxes = sampled_frames
+            vids,frames,bboxes,cats,all_bboxes = sampled_frames
             all_images = frames
         elif dataset == 'spill':
-            pos_img = cv2.imread(self.spill_images[np.random.randint(len(self.spill_images))])
-            neg_img = cv2.imread(self.not_spill_images[np.random.randint(len(self.not_spill_images))])
-            neg_img2 = cv2.imread(self.not_spill_images[np.random.randint(len(self.not_spill_images))])
+            pos_img = Image.open(self.spill_images[np.random.randint(len(self.spill_images))])
+            neg_img = Image.open(self.not_spill_images[np.random.randint(len(self.not_spill_images))])
+            neg_img2 = Image.open(self.not_spill_images[np.random.randint(len(self.not_spill_images))])
             all_images = [pos_img,neg_img,neg_img2]
         elif dataset == 'puddle':
-            pos_img = cv2.imread(self.puddle_images[np.random.randint(len(self.puddle_images))])
-            neg_img = cv2.imread(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
-            neg_img2 = cv2.imread(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
+            pos_img = Image.open(self.puddle_images[np.random.randint(len(self.puddle_images))])
+            neg_img = Image.open(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
+            neg_img2 = Image.open(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
             all_images = [pos_img,neg_img,neg_img2]
 
         imgs = []
-        spill_masks = []
         for i_ix,img in enumerate(all_images):
             cat = 0 if i_ix==0 else 1
 
-            img = img/255.
             img_h,img_w,_ = img.shape
             img_size = min(img_h,img_w)
 
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
 
             if self.train:
-                #img = tf.keras.preprocessing.image.random_channel_shift(img, intensity_range=0.3, channel_axis=2)
                 if dataset == 'spill':
-                    if cat == 0:
-                        crop_size = np.random.randint(int(0.8*img_size),img_size+1)
-                        new_size = np.random.randint(int(self.input_size*0.1),int(self.input_size*0.4))
-                        spill_mask = np.ones([crop_size,crop_size,1],dtype=np.float32)
-                    else:
-                        if np.random.random() < 0.25:
-                            crop_size = np.random.randint(int(0.1*img_size),int(0.4*img_size))
-                            new_size = np.random.randint(int(self.input_size*0.1),int(self.input_size*0.4))
-                        else:
-                            crop_size = np.random.randint(int(0.7*img_size),img_size)
-                            new_size = np.random.randint(int(self.input_size*0.8),int(self.input_size*1.4))
+                    cr_h,cr_w = np.random.randint(int(0.7*img_h),img_h+1),np.random.randint(int(0.7*img_w),img_w+1)
+                    cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
+                    crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+
+                    crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
+                    num_patches = self.num_patches['spill'] if cat == 0 else self.num_patches['not_spill']
+                    all_patches = []
+                    for num_p,cr_dim in zip(num_patches,crop_dims):
+                        min_dim,max_dim = cr_dim
+                        num_x = min_dim if cr_h > cr_w else max_dim
+                        num_y = max_dim if cr_h > cr_w else min_dim
+                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                        p_count = 0
+                        for x_ix in range(num_x):
+                            for y_ix in range(num_y):
+                                if p_count in patch_samples:
+                                    all_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                p_count += 1
+
                 elif dataset == 'video':
                     frame_bboxes = all_bboxes[i_ix]
                     for bb in frame_bboxes:
@@ -157,15 +176,42 @@ class CustomDataGen(tf.keras.utils.Sequence):
                             cr_t = cr_b-crop_size
 
                     crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
-
-                    crop = img[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
                     spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
 
-                    if int(crop_size*self.vid_resize_range[img_size][0]) < self.input_size:
-                        new_size = np.random.randint(int(crop_size*self.vid_resize_range[img_size][0]), \
-                                                     min(int(crop_size*self.vid_resize_range[img_size][1]),self.input_size))
-                    else:
-                        new_size = self.input_size
+                    crop = img.crop((cr_l,cr_t,cr_r,cr_b))
+                    cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
+
+                    vid_group = vids[0] if i_ix<4 else vids[1]
+                    crop_dims = self.crop_dims[vid_group]
+                    num_patches = self.num_patches[vid_group]
+                    all_patches = []
+                    for num_p,cr_dim in zip(num_patches,crop_dims):
+                        min_dim,max_dim = cr_dim
+                        num_x = min_dim if cr_h > cr_w else max_dim
+                        num_y = max_dim if cr_h > cr_w else min_dim
+                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                        spill_patches = []
+                        sampled_patches = []
+                        p_count = 0
+                        for y_ix in range(num_y):
+                            for x_ix in range(num_x):
+                                if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
+                                    spill_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    print(vid_group,cr_dim,spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean())
+                                elif p_count in patch_samples:
+                                    sampled_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+
+                                p_count += 1
+                                if len(spill_patches) == num_p:
+                                    break
+                            if len(spill_patches) == num_p:
+                                break
+
+                       all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
+
+                    print(len(all_patches))
+
                 elif dataset == 'puddle':
                     if cat == 0:
                         crop_size = np.random.randint(int(0.8*img_size),img_size+1)
@@ -178,153 +224,142 @@ class CustomDataGen(tf.keras.utils.Sequence):
                             crop_size = np.random.randint(int(0.7*img_size),img_size)
                             new_size = np.random.randint(int(self.input_size*0.6),int(self.input_size*1.2))
 
-                if dataset != 'video':
-                    crop = tf.image.random_crop(img,(crop_size,crop_size,3))
-                #crop = tfa.image.rotate(crop,np.random.randint(-20,20))
-
-                img = tf.image.resize(crop, [new_size,new_size])
-                spill_mask = tf.image.resize(spill_mask, [new_size,new_size], method='nearest')
-
-                img = tf.image.random_brightness(img, 0.7)
-                img = tf.image.random_contrast(img, 0.3,1.7)
-                img = tf.image.random_hue(img, 0.2)
-                img = tf.image.random_flip_left_right(img)
-                img = tf.image.resize_with_crop_or_pad(img,self.input_size,self.input_size)
-                spill_mask = tf.image.resize_with_crop_or_pad(spill_mask,self.input_size,self.input_size)
-            else:
-                if dataset == 'video':
+                crops = torch.stack(all_patches)
+                crops = self.color_aug(crops)
+            else:        
+                if dataset == 'spill':
+                    crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
+                    num_patches = self.num_patches['spill'] if cat == 0 else self.num_patches['not_spill']
+                    all_patches = []
+                    for num_p,cr_dim in zip(num_patches,crop_dims):
+                        min_dim,max_dim = cr_dim
+                        num_x = min_dim if cr_h > cr_w else max_dim
+                        num_y = max_dim if cr_h > cr_w else min_dim
+                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                        p_count = 0
+                        for x_ix in range(num_x):
+                            for y_ix in range(num_y):
+                                if p_count in patch_samples:
+                                    all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                p_count += 1
+                elif dataset == 'video':
                     cat = cats[i_ix]
                     frame_bboxes = all_bboxes[i_ix]
                     for bb in frame_bboxes:
                         spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
 
-                img = img[img_h//2-img_size//2:img_h//2+img_size//2,img_w//2-img_size//2:img_w//2+img_size//2]
-                spill_mask = spill_mask[img_h//2-img_size//2:img_h//2+img_size//2,img_w//2-img_size//2:img_w//2+img_size//2]
-                if dataset == 'spill':
-                    if cat == 0:
-                        new_size = int(self.input_size*0.2)
-                        img = tf.image.resize(img, [new_size,new_size])
-                        spill_mask = np.ones([new_size,new_size,1],dtype=np.float32)
-                    else:
-                        new_size = self.input_size
+                    crop_dims = self.crop_dims['val_vid']
+                    num_patches = self.num_patches['val_vid']
+                    all_patches = []
+                    for num_p,cr_dim in zip(num_patches,crop_dims):
+                        min_dim,max_dim = cr_dim
+                        num_x = min_dim if cr_h > cr_w else max_dim
+                        num_y = max_dim if cr_h > cr_w else min_dim
+                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                        spill_patches = []
+                        sampled_patches = []
+                        p_count = 0
+                        for y_ix in range(num_y):
+                            for x_ix in range(num_x):
+                                if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
+                                    spill_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    print(vids,cr_dim,spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean())
+                                elif p_count in patch_samples:
+                                    sampled_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
 
-                img = tf.image.resize_with_crop_or_pad(img,self.input_size,self.input_size)
-                spill_mask = tf.image.resize_with_crop_or_pad(spill_mask,self.input_size,self.input_size)
-                img = tf.cast(img,dtype=tf.float32)
+                                p_count += 1
+                                if len(spill_patches) == num_p:
+                                    break
+                            if len(spill_patches) == num_p:
+                                break
 
-            if cat == 0 and spill_mask.numpy().max() == 0:
-                if dataset=='video':
-                    print(i_ix,self.train,crop_dim,bbox,spill_mask.shape,frame_bboxes)
-                else:
-                    print(i_ix,self.train,spill_mask.shape,crop_size,new_size)
+                       all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
 
-            imgs.append(img)
-            spill_masks.append(spill_mask)
+                    print(len(all_patches))
 
-        return imgs,spill_masks
+                crops = torch.stack(all_patches)
+
+            imgs.append(crops)
+
+        return imgs
 
     #def on_epoch_end(self):
     #    self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
     
     def __getitem__(self, index):
-        '''pos_puddle = []
-        neg_puddle = []
-        pos_video = []
-        neg_video = []
-        pos_spill = []
-        neg_spill = []'''
-
-        vid = self.videos[np.random.randint(len(self.videos))]
-        with open(vid[:-4]+'.txt','r') as fp:
-            lines = fp.read().splitlines()
-
-        no_spill_frames = []
-        spill_frames = defaultdict(list)
-        for line in lines:
-            if 'no_spill' in line:
-                fr,lab = line.split(' ')
-                no_spill_frames.append(int(fr[2:]))
-            elif 'spill' in line:
-                fr,lab,lux,luy,rbx,rby = line.split(' ')
-                spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
-
-        if len(spill_frames) >= 4:
-            neg_fr_idxs = random.sample(no_spill_frames,min(len(no_spill_frames),4))
-        else:
-            neg_fr_idxs = random.sample(no_spill_frames,8)
-
-        pos_fr_idxs = random.sample(list(spill_frames.keys()),8-len(neg_fr_idxs))
-        pos_bboxes = []
-        for fr in pos_fr_idxs:
-            pos_bboxes.extend(spill_frames[fr])
-
-        vid_frames = glob.glob(vid[:-4]+'/*.png')
         cats = []
         frames = []
         bboxes = []
         all_bboxes = []
-        for frame_name in vid_frames:
-            count = int(frame_name.split('/')[-1][:-4])
-            if count in pos_fr_idxs:
-                all_bboxes.append(spill_frames[count])
-                bbox = random.choice(spill_frames[count])
-                cats.append(0)
-            elif count in neg_fr_idxs:
-                if len(pos_bboxes)==0:
-                    frame = cv2.imread(frame_name)
-                    lux = np.random.randint(frame.shape[1]-100)
-                    luy = np.random.randint(frame.shape[0]-100)
-                    s = np.random.randint(100)
-                    bbox = (lux,luy,lux+s,luy+s)
+        vids = []
+        for v in range(2):
+            vid = self.videos[np.random.randint(len(self.videos))]
+            for vid_group in ['gallon','drinks','react','store']:
+                if vid_group in vid:
+                    vids.append(vid_group)
+                    break
+
+            with open(vid[:-4]+'.txt','r') as fp:
+                lines = fp.read().splitlines()
+
+            no_spill_frames = []
+            spill_frames = defaultdict(list)
+            for line in lines:
+                if 'no_spill' in line:
+                    fr,lab = line.split(' ')
+                    no_spill_frames.append(int(fr[2:]))
+                elif 'spill' in line:
+                    fr,lab,lux,luy,rbx,rby = line.split(' ')
+                    spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
+
+            neg_fr_idxs = random.sample(no_spill_frames,2)
+            pos_fr_idxs = random.sample(list(spill_frames.keys()),2)
+            pos_bboxes = []
+            for fr in pos_fr_idxs:
+                pos_bboxes.extend(spill_frames[fr])
+
+            vid_frames = glob.glob(vid[:-4]+'/*.png')
+            for frame_name in vid_frames:
+                count = int(frame_name.split('/')[-1][:-4])
+                if count in pos_fr_idxs:
+                    all_bboxes.append(spill_frames[count])
+                    bbox = random.choice(spill_frames[count])
+                    cats.append(0)
+                elif count in neg_fr_idxs:
+                    if len(pos_bboxes)==0:
+                        frame = Image.open(frame_name)
+                        lux = np.random.randint(frame.shape[1]-100)
+                        luy = np.random.randint(frame.shape[0]-100)
+                        s = np.random.randint(100)
+                        bbox = (lux,luy,lux+s,luy+s)
+                    else:
+                        bbox = random.choice(pos_bboxes)
+                    all_bboxes.append([])
+                    cats.append(1)
                 else:
-                    bbox = random.choice(pos_bboxes)
-                all_bboxes.append([])
-                cats.append(1)
-            else:
-                continue
+                    continue
 
-            frame = cv2.imread(frame_name)
-            frames.append(frame)
-            bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.shape[1]-1,bbox[2]),min(frame.shape[0]-1,bbox[3])))
+                frame = Image.open(frame_name)
+                frames.append(frame)
+                bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.shape[1]-1,bbox[2]),min(frame.shape[0]-1,bbox[3])))
 
-        imgs,spill_masks = self.__get_image__(index, dataset='video', sampled_frames=(frames,bboxes,cats,all_bboxes))
+        imgs = self.__get_image__(index, dataset='video', sampled_frames=(vids,frames,bboxes,cats,all_bboxes))
         pos_images = [img for img,cat in zip(imgs,cats) if cat==0]
         neg_images = [img for img,cat in zip(imgs,cats) if cat==1]
-        pos_masks = [mask for mask,cat in zip(spill_masks,cats) if cat==0]
-        neg_masks = [mask for mask,cat in zip(spill_masks,cats) if cat==1]
+        print(pos_images[0].shape, neg_images[0].shape)
 
         for ix in range(self.batch_size):
-            '''if self.train:
-                imgs = self.__get_image__(index+ix, dataset='puddle')
-                pos_puddle.append(imgs[0])
-                neg_puddle.append(imgs[1])
-                neg_puddle.append(imgs[2])'''
-
-            imgs,spill_masks = self.__get_image__(index+ix, dataset='spill')
+            imgs = self.__get_image__(index+ix, dataset='spill')
             pos_images.append(imgs[0])
             neg_images.append(imgs[1])
             neg_images.append(imgs[2])
-            pos_masks.append(spill_masks[0])
-            neg_masks.append(spill_masks[1])
-            neg_masks.append(spill_masks[2])
 
-        '''if self.train:
-            X = tf.concat([tf.stack(pos_puddle),tf.stack(pos_video),tf.stack(pos_spill),tf.stack(neg_puddle),tf.stack(neg_video),tf.stack(neg_spill)],axis=0)
-        else:
-            X = tf.concat([tf.stack(pos_video),tf.stack(pos_spill),tf.stack(neg_video),tf.stack(neg_spill)],axis=0)'''
+        print(pos_images[-1].shape, neg_images[-1].shape)
 
-        X = tf.stack(pos_images+neg_images)
-        #lab = tf.reshape(tf.concat([self.ones[:len(pos_images)],self.zeros[:len(neg_images)]],axis=0),[-1,1])
-
-        loc_reg_pts = []
-        for f_ix,m in enumerate(pos_masks[:4]):
-            spill_pix = tf.where(m)[:,:2] # n,2
-            sample_idxs = np.random.choice(spill_pix.shape[0],self.num_spill_samples,replace=False)
-            spill_pix = tf.cast(tf.gather(spill_pix,sample_idxs,axis=0),dtype=tf.float32)
-            loc_reg_pts.append(2*spill_pix/self.input_size - 1)
-
-        loc_reg_pts = tf.stack(loc_reg_pts)
-        lab = (tf.stack(pos_masks+neg_masks), loc_reg_pts)
+        X = torch.stack(pos_images+neg_images)
+        lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
 
         return X,lab
     
