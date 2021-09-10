@@ -9,6 +9,9 @@ from collections import defaultdict
 
 from PIL import Image
 
+import warnings
+warnings.filterwarnings("ignore")
+
 from absl import flags, app
 
 FLAGS = flags.FLAGS
@@ -53,13 +56,12 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.neg_frames[vid] = not_spill_frames
 
         self.batch_size = batch_size
-        self.input_size = FLAGS.input_size
-
-        self.color_aug = torchvision.transforms.ColorJitter(0.4,0.4,0.4,0.1)
         self.num_crops = {}
 
         self.zeros = torch.zeros(1024)
         self.ones = torch.ones(1024)
+
+        self.random_flip = torchvision.transforms.RandomHorizontalFlip(p=0.5)
 
         self.num_spill_samples = 30
 
@@ -102,7 +104,7 @@ class CustomDataGen(torch.utils.data.Dataset):
         for i_ix,img in enumerate(all_images):
             cat = 0 if i_ix==0 else 1
 
-            img_h,img_w,_ = img.shape
+            img_w,img_h = img.size
             img_size = min(img_h,img_w)
 
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
@@ -126,7 +128,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         for x_ix in range(num_x):
                             for y_ix in range(num_y):
                                 if p_count in patch_samples:
-                                    all_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                 p_count += 1
 
                 elif dataset == 'video':
@@ -197,10 +199,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                         for y_ix in range(num_y):
                             for x_ix in range(num_x):
                                 if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
-                                    spill_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                                    print(vid_group,cr_dim,spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean())
+                                    spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                 elif p_count in patch_samples:
-                                    sampled_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                                 p_count += 1
                                 if len(spill_patches) == num_p:
@@ -208,24 +209,10 @@ class CustomDataGen(torch.utils.data.Dataset):
                             if len(spill_patches) == num_p:
                                 break
 
-                       all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
-
-                    print(len(all_patches))
-
-                elif dataset == 'puddle':
-                    if cat == 0:
-                        crop_size = np.random.randint(int(0.8*img_size),img_size+1)
-                        new_size = np.random.randint(int(self.input_size*0.1),int(self.input_size*0.4))
-                    else:
-                        if img_size==400:
-                            crop_size = np.random.randint(int(0.5*img_size),int(img_size))
-                            new_size = np.random.randint(int(self.input_size*0.1),int(self.input_size*0.4))
-                        else:
-                            crop_size = np.random.randint(int(0.7*img_size),img_size)
-                            new_size = np.random.randint(int(self.input_size*0.6),int(self.input_size*1.2))
+                        all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
 
                 crops = torch.stack(all_patches)
-                crops = self.color_aug(crops)
+                #crops = self.color_aug(crops)
             else:        
                 if dataset == 'spill':
                     crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
@@ -233,9 +220,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                     all_patches = []
                     for num_p,cr_dim in zip(num_patches,crop_dims):
                         min_dim,max_dim = cr_dim
-                        num_x = min_dim if cr_h > cr_w else max_dim
-                        num_y = max_dim if cr_h > cr_w else min_dim
-                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        num_x = min_dim if img_h > img_w else max_dim
+                        num_y = max_dim if img_h > img_w else min_dim
+                        p_w,p_h = img_w//num_x, img_h//num_y
                         patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
                         p_count = 0
                         for x_ix in range(num_x):
@@ -254,9 +241,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                     all_patches = []
                     for num_p,cr_dim in zip(num_patches,crop_dims):
                         min_dim,max_dim = cr_dim
-                        num_x = min_dim if cr_h > cr_w else max_dim
-                        num_y = max_dim if cr_h > cr_w else min_dim
-                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        num_x = min_dim if img_h > img_w else max_dim
+                        num_y = max_dim if img_h > img_w else min_dim
+                        p_w,p_h = img_w//num_x, img_h//num_y
                         patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
                         spill_patches = []
                         sampled_patches = []
@@ -264,10 +251,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                         for y_ix in range(num_y):
                             for x_ix in range(num_x):
                                 if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
-                                    spill_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                                    print(vids,cr_dim,spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean())
+                                    spill_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
                                 elif p_count in patch_samples:
-                                    sampled_patches.append(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    sampled_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
 
                                 p_count += 1
                                 if len(spill_patches) == num_p:
@@ -275,9 +261,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                             if len(spill_patches) == num_p:
                                 break
 
-                       all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
-
-                    print(len(all_patches))
+                        all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
 
                 crops = torch.stack(all_patches)
 
@@ -330,8 +314,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                 elif count in neg_fr_idxs:
                     if len(pos_bboxes)==0:
                         frame = Image.open(frame_name)
-                        lux = np.random.randint(frame.shape[1]-100)
-                        luy = np.random.randint(frame.shape[0]-100)
+                        lux = np.random.randint(frame.size[0]-100)
+                        luy = np.random.randint(frame.size[1]-100)
                         s = np.random.randint(100)
                         bbox = (lux,luy,lux+s,luy+s)
                     else:
@@ -343,22 +327,18 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                 frame = Image.open(frame_name)
                 frames.append(frame)
-                bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.shape[1]-1,bbox[2]),min(frame.shape[0]-1,bbox[3])))
+                bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
 
         imgs = self.__get_image__(index, dataset='video', sampled_frames=(vids,frames,bboxes,cats,all_bboxes))
         pos_images = [img for img,cat in zip(imgs,cats) if cat==0]
         neg_images = [img for img,cat in zip(imgs,cats) if cat==1]
-        print(pos_images[0].shape, neg_images[0].shape)
-
         for ix in range(self.batch_size):
             imgs = self.__get_image__(index+ix, dataset='spill')
             pos_images.append(imgs[0])
             neg_images.append(imgs[1])
             neg_images.append(imgs[2])
 
-        print(pos_images[-1].shape, neg_images[-1].shape)
-
-        X = torch.stack(pos_images+neg_images)
+        X = torch.cat(pos_images+neg_images)
         lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
 
         return X,lab

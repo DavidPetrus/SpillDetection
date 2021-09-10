@@ -14,17 +14,16 @@ class SpillDetector(nn.Module):
         super(SpillDetector, self).__init__()
 
         self.num_prototypes = FLAGS.num_prototypes
-        self.top_k = FLAGS.top_k
 
         self.clip_model = clip_model
-        self.prototypes = torch.randn(self.num_prototypes, 512)
+        self.prototypes = nn.Parameter(torch.randn(self.num_prototypes, 512).to('cuda'), requires_grad=True)
 
     def forward(self, x):
         with torch.no_grad():
             img_features = self.clip_model.encode_image(x)
             img_features = F.normalize(img_features)
 
-        prototypes = F.normalize(self.prototypes)
+        prototypes = F.normalize(self.prototypes).to(torch.half)
 
         sims = img_features @ prototypes.T
 
