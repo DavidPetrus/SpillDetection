@@ -25,6 +25,7 @@ flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.1,'')
 
 flags.DEFINE_string('clip_model','ViT-B/32','')
+flags.DEFINE_integer('proj_head',0,'')
 flags.DEFINE_integer('num_prototypes',20,'')
 flags.DEFINE_integer('top_k_spill',3,'')
 flags.DEFINE_integer('top_k_vids',6,'')
@@ -34,6 +35,7 @@ def main(argv):
     wandb.init(project="SpillDetection",name=FLAGS.exp)
     wandb.config.update(flags.FLAGS)
 
+    torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
 
     TRAIN_IMAGES_PATH = "./images/train"
@@ -79,7 +81,7 @@ def main(argv):
             sims = spill_det(img_patches)
             pos_sims_vids = sims[:120].reshape(4,30,FLAGS.num_prototypes)
             pos_sims_spills = sims[120:200].reshape(8,10,FLAGS.num_prototypes)
-            neg_sims = sims[200:].reshape(1,-1).tile(4,1)
+            neg_sims = sims[200:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
             logits = []
             top_mask = vid_mask.clone()
@@ -121,11 +123,12 @@ def main(argv):
 
             wandb.log(log_dict)
 
-            if train_iter == 100:
+            if train_iter == 300:
                 for g in optimizer.param_groups:
                     g['lr'] = 0.001
 
-
+        val_video_loss = 0.
+        val_count = 0
         for data in validation_generator:
             with torch.no_grad():
                 img_patches,_ = data
@@ -133,7 +136,7 @@ def main(argv):
                 sims = spill_det(img_patches.to('cuda'))
                 pos_sims_vids = sims[:120].reshape(4,30,FLAGS.num_prototypes)
                 pos_sims_spills = sims[120:160].reshape(4,10,FLAGS.num_prototypes)
-                neg_sims = sims[160:].reshape(1,-1).tile(4,1)
+                neg_sims = sims[160:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
                 logits = []
                 top_mask = vid_mask.clone()
@@ -160,11 +163,20 @@ def main(argv):
 
                 final_loss = vid_loss + spill_loss
 
+                val_video_loss += vid_loss
+                val_count += 1
+
                 val_iter += 1
                 log_dict = {"Epoch":epoch,"Val_iter":val_iter,"Val Loss": final_loss, "Val Video Loss": vid_loss, "Val Spill Loss":spill_loss, \
                             "Val Video Accuracy": vid_acc, "Val Spill Accuracy": spill_acc}
 
                 wandb.log(log_dict)
+
+        val_video_loss = val_video_loss/val_count
+        print("Val Video Loss",val_video_loss)
+
+        if val_video_loss < min_loss:
+            torch.save(spill_det.state_dict(),'weights/{}.pt'.format(FLAGS.exp))
 
 
 if __name__ == '__main__':
