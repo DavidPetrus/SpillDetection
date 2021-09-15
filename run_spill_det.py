@@ -48,7 +48,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
         model_path (str): path to saved model
     """
 
-    device = 'cpu'
+    device = 'cuda'
 
     clip_model, preprocess = clip.load(FLAGS.clip_model,device=device)
 
@@ -57,16 +57,16 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
     spill_det.load_state_dict(torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device)))
     
 
-    crop_dims = [(3,5),(4,7),(5,8),(6,10)]
-    #crop_dims = [(5,8)]
-    num_patches = [15,28,10,15]
-    #num_patches = [40]
+    #crop_dims = [(3,5),(4,7),(5,8),(6,10)]
+    crop_dims = [(3,5),(4,7)]
+    #num_patches = [15,28,10,15]
+    num_patches = [40]
 
     if not is_image:
         cap = cv2.VideoCapture(input_path)
         ret, frame = cap.read()
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights+FLAGS.video+'.avi', fourcc, 5.0, (frame.shape[1],frame.shape[0]))
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights[:-3]+FLAGS.video, fourcc, 5.0, (frame.shape[1],frame.shape[0]))
 
         motion_det = MotionDetector(frame,mot_frame_buffer,mot_thresh)
 
@@ -98,7 +98,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                     elif cr_dim[0] == 6:
                         x_offset = 3
                     else:
-                        x_offset = 0.
+                        x_offset = 0
 
                     spill_patches = []
                     sampled_patches = []
@@ -120,26 +120,30 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 sims = spill_det(img_patches)
                 max_sim = sims.max()
                 max_ix = torch.argmax(sims.max(dim=1)[0])
-                print(max_ix)
                 bbox = bboxes[max_ix]
             
             #logits_str = "SimCurr_{:.2f}_{}_SimRef_{:.2f}_{}".format(sims_curr[0,0].numpy(),curr_nn_idxs[0,0].numpy(),sims_ref[0,0].numpy(),ref_nn_idxs[0,0].numpy())
-            logits_str = "{:.2f}".format(max_sim.cpu().numpy())
+            max_sim = max_sim.cpu().numpy()
+            logits_str = "{:.2f}".format(max_sim)
 
-            if False:
+            if max_sim > 0.17:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
-                cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                #cv2.putText(frame, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+            elif max_sim > 0.15:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
+                cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
             else:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
-                cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
-                #cv2.putText(frame, "No Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
 
 
             #for bbox in motion_bboxes:
             #    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
             
-            #writer.write(frame)
+            writer.write(frame)
             cv2.imshow('a',frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break

@@ -37,11 +37,11 @@ class CustomDataGen(torch.utils.data.Dataset):
         self.rds = [vid for vid in self.vids if not 'gallon' in vid]
 
         self.preprocess = preprocess
-        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(3,4)],'not_spill':[(3,5),(4,7),(5,8),(6,10)], \
-                          'gallon':[(2,3),(3,5),(4,7),(5,8)],'react':[(2,3),(3,5),(4,6)],'drinks':[(3,5),(4,7),(5,8)], \
-                          'store':[(3,5),(4,7),(5,8)],'val_vid':[(3,5),(4,7),(5,8),(6,10)]}
-        self.num_patches = {'spill':[1,2,4,3],'not_spill':[15,14,10,11],'gallon':[6,8,8,8],'react':[6,10,14], \
-                            'drinks':[10,10,10],'store':[10,10,10],'val_vid':[5,5,10,10]}
+        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(3,4)],'not_spill':[(2,3),(3,5),(4,7),(5,8)], \
+                          'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)], \
+                          'store':[(2,3),(3,5),(4,7)],'val_vid':[(2,3),(3,5),(4,7)]}
+        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,14,15],'gallon':[2,6,12,10],'react':[2,6,15,7], \
+                            'drinks':[6,14,10],'store':[6,14,10],'val_vid':[6,10,14]}
 
         self.vid_frames = {}
         self.pos_frames = {}

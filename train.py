@@ -140,13 +140,13 @@ def main(argv):
 
                 logits = []
                 top_mask = vid_mask.clone()
-                for k in range(4):
+                for k in range(2):
                     p_sim = (pos_sims_vids*top_mask).max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
                     logits.append(torch.cat([p_sim[:,:,0],neg_sims],dim=1)/FLAGS.temperature)
                     top_mask[pos_sims_vids == p_sim] = 0.
 
                 logits = torch.cat(logits,dim=0)
-                vid_loss = F.cross_entropy(logits,lab[:4*4])
+                vid_loss = F.cross_entropy(logits,lab[:2*4])
                 vid_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
                 #neg_sims = neg_sims.tile(2,1)
