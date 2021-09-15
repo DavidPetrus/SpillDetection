@@ -9,34 +9,27 @@ import cv2
 import os
 import random
 import matplotlib.pyplot as plt
-import seaborn as sns
+from PIL import Image
+import torch
 
 from Motion import MotionDetector
 
-# DPT imports
-import torch
-import torch.nn.functional as F
-import util.io
-from torchvision.transforms import Compose
-from dpt.models import DPTSegmentationModel
-from dpt.transforms import Resize, NormalizeImage, PrepareForNet
+from spill_model import SpillDetector
+import clip
 
-# Classifier imports
-from tensorflow.keras.applications import * #Efficient Net included here
-from tensorflow.keras import models
-from tensorflow.keras import layers
-import tensorflow as tf
+from absl import flags, app
 
-physical_devices = tf.config.list_physical_devices('GPU')
-for gpu_instance in physical_devices: 
-    tf.config.experimental.set_memory_growth(gpu_instance, True)
+FLAGS = flags.FLAGS
 
+flags.DEFINE_string('clip_model','ViT-B/32','')
+flags.DEFINE_integer('proj_head',0,'')
+flags.DEFINE_integer('num_prototypes',20,'')
 
-height = 224
-width = 224
+flags.DEFINE_string('model_weights','','')
+flags.DEFINE_string('video','','')
 
-model_weights = "27Aug6"
-video = "gallon1_1.mp4"
+image_size = 720
+crop_size = 224
 
 pred_thresh = 2
 diff_thresh = 3
@@ -54,50 +47,26 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
         output_path (str): path to output folder
         model_path (str): path to saved model
     """
-    print("initialize")
 
-    # select device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("device: %s" % device)
+    device = 'cuda'
 
-    net_w = net_h = 480
+    clip_model, preprocess = clip.load(FLAGS.clip_model,device=device)
 
-    #candidate_spill_categories = torch.tensor([22,28,29,44,61,105,110,121,129,138,142,143,148,23]).reshape(1,-1,1)
-    candidate_spill_categories = torch.tensor([22,29,44,61,105,110,121,129,138,142,143,148,23]).reshape(1,-1,1).to('cuda')
-    floor_cat = torch.tensor([4]).reshape(1,1,1).to('cuda')
-    # water, mirror, rug, sign, river, fountain, swimming_pool, food, lake, tray, screen, plate, glass, painting
-    top_k = 3
+    spill_det = SpillDetector(clip_model,device=device)
+    spill_det.to(device)
+    spill_det.load_state_dict(torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device)))
+    
 
-    model = DPTSegmentationModel(
-        150,
-        path=model_path,
-        backbone="vitb_rn50_384",
-    )
-
-    transform = Compose(
-        [
-            Resize(
-                net_w,
-                net_h,
-                resize_target=None,
-                keep_aspect_ratio=True,
-                ensure_multiple_of=32,
-                resize_method="minimal",
-                image_interpolation_method=cv2.INTER_CUBIC,
-            ),
-            NormalizeImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-            PrepareForNet(),
-        ]
-    )
-
-    model.eval()
-    model.to(device)
+    #crop_dims = [(3,5),(4,7),(5,8),(6,10)]
+    crop_dims = [(3,5),(4,7)]
+    #num_patches = [15,28,10,15]
+    num_patches = [40]
 
     if not is_image:
         cap = cv2.VideoCapture(input_path)
         ret, frame = cap.read()
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        writer = cv2.VideoWriter('output_videos/'+model_weights+video+'.avi', fourcc, 5.0, (frame.shape[1],frame.shape[0]))
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights[:-3]+FLAGS.video, fourcc, 5.0, (frame.shape[1],frame.shape[0]))
 
         motion_det = MotionDetector(frame,mot_frame_buffer,mot_thresh)
 
@@ -111,85 +80,71 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
             if count % 7 > 0:
                 continue
 
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) / 255.0
-            img_input = transform({"image": img})["image"]
-
-            # compute
+            cv2.imwrite('temp.png',frame)
+            img = Image.open('temp.png')
+            img_w,img_h = img.size
+            
             with torch.no_grad():
-                sample = torch.from_numpy(img_input).to(device).unsqueeze(0)
+                img_patches = []
+                bboxes = []
+                for num_p,cr_dim in zip(num_patches,crop_dims):
+                    num_y,num_x = cr_dim
+                    p_w,p_h = img_w//num_x, img_h//num_y
+                    #patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                    if cr_dim[0] == 4:
+                        x_offset = 1
+                    elif cr_dim[0] == 5:
+                        x_offset = 2
+                    elif cr_dim[0] == 6:
+                        x_offset = 3
+                    else:
+                        x_offset = 0
 
-                out = model.forward(sample)
+                    spill_patches = []
+                    sampled_patches = []
+                    p_count = 0
+                    for y_ix in range(num_y):
+                        for x_ix in range(x_offset,num_x-x_offset):
+                            sampled_patches.append(preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                            bboxes.append((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))
 
-                prediction = torch.nn.functional.interpolate(
-                    out, size=img.shape[:2], mode="bicubic", align_corners=False
-                )
-                max_pred = torch.argmax(prediction, dim=1, keepdim=True) + 1
-                max_pred = max_pred.squeeze().cpu().numpy()
-                
-                sorted_k = torch.argsort(prediction, dim=1, descending=True)[:,:top_k] + 1
+                            p_count += 1
+                            if len(spill_patches) == num_p:
+                                break
+                        if len(spill_patches) == num_p:
+                            break
 
-                spill_pix = (sorted_k.reshape(top_k,1,-1) == candidate_spill_categories).any(dim=1).any(dim=0)
-                floor_pix = (sorted_k[:,:1].reshape(1,-1) == 4).any(dim=0)
-                candidate_pix = torch.logical_and(spill_pix,floor_pix).reshape(img.shape[:2])
-                candidate_pix = candidate_pix.long()
-                seg_mask = candidate_pix.cpu().numpy() + 2
-                candidate_pix = candidate_pix.cpu().numpy() * 255
+                    img_patches.extend(sampled_patches)
 
-            # output
-            #filename = os.path.join(
-            #    output_path, os.path.splitext(os.path.basename(img_name))[0]
-            #)
-            #util.io.write_segm_img(filename, img, seg_mask, alpha=0.5)
+                img_patches = torch.stack(img_patches).to(device)
+                sims = spill_det(img_patches)
+                max_sim = sims.max()
+                max_ix = torch.argmax(sims.max(dim=1)[0])
+                bbox = bboxes[max_ix]
             
-            img = frame
-            #motion_bboxes = motion_det.detect(frame)
-            motion_bboxes = []
+            #logits_str = "SimCurr_{:.2f}_{}_SimRef_{:.2f}_{}".format(sims_curr[0,0].numpy(),curr_nn_idxs[0,0].numpy(),sims_ref[0,0].numpy(),ref_nn_idxs[0,0].numpy())
+            max_sim = max_sim.cpu().numpy()
+            logits_str = "{:.2f}".format(max_sim)
 
-            print(no_spill_frame.shape,frame.shape)
-            crops, no_spill_crops, bboxes = get_spill_crops(frame.copy(), no_spill_frame.copy(), candidate_pix.astype(np.uint8), motion_bboxes)
-            for crop,ns_crop,bbox in zip(crops,no_spill_crops,bboxes):
-                resized = crop/255.
-                resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
-                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
-                #resized = tf.image.resize(resized, [224,224])
-                resized = tf.reshape(resized,(1,224,224,3))
-                outp = spill_classifier(resized,training=False)
-
-                resized = ns_crop/255.
-                resized = tf.image.central_crop(resized,central_fraction=min(resized.shape[0]/resized.shape[1],resized.shape[1]/resized.shape[0]))
-                resized = tf.image.resize(resized, [int(resized.shape[0]*3),int(resized.shape[0]*3)])
-                resized = tf.image.resize_with_crop_or_pad(resized, target_height=224, target_width=224)
-                #resized = tf.image.resize(resized, [224,224])
-                resized = tf.reshape(resized,(1,224,224,3))
-                ns_outp = spill_classifier(resized,training=False)
-
-                embds = tf.concat([outp,ns_outp], axis=0)
-                embds = tf.nn.l2_normalize(embds, axis=1)
-                sims_all = tf.matmul(embds,embds,transpose_b=True)
-
-                #conf = outp[:,spill].numpy()[0]
-                #pred = outp[0,0]
-                #diff = pred-ns_outp[0,0]
-                #logits_str = "Pred_{:.1f}_Diff_{:.1f}_Sum_{:.1f}".format(pred,diff,pred+diff)
-                
-                logits_str = "Sim_{}".format(sims_all[0,1].numpy())
-
-                if False:
-                    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
-                    cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                    #cv2.putText(img, "Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                else:
-                    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
-                    cv2.putText(img, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
-                    #cv2.putText(img, "No Spill", (bbox[0],bbox[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+            if max_sim > 0.17:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+            elif max_sim > 0.15:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
+                cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
+            else:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
+                #cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
 
 
-            for bbox in motion_bboxes:
-                cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
+            #for bbox in motion_bboxes:
+            #    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
             
-            writer.write(img)
-            cv2.imshow('a',img)
+            writer.write(frame)
+            cv2.imshow('a',frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
@@ -278,24 +233,21 @@ def get_spill_crops(image, no_spill_frame, spill_seg, motion_bboxes):
     
     return crops, no_spill_crops, ret_bboxes
 
-conv_base = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(height,width,3))
-spill_classifier = models.Sequential()
-spill_classifier.add(conv_base)
-spill_classifier.add(layers.GlobalMaxPooling2D(name="gap"))
-#avoid overfitting
-#model.add(layers.Dropout(rate=0.2, name="dropout_out"))
-# Set NUMBER_OF_CLASSES to the number of your final predictions.
-spill_classifier.add(layers.Dense(320, activation="linear", name="fc_out"))
-spill_classifier.load_weights("effnet_weights/"+model_weights+'.h5')
 
-no_spill_frame = cv2.imread('reference_frames/{}.png'.format(video[:-4]))
+def main(argv):
 
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark = True
+    no_spill_frame = cv2.imread('reference_frames/{}.png'.format(FLAGS.video[:-4]))
 
-run(
-    "input_videos/{}".format(video),
-    "output_semseg",
-    "weights/dpt_hybrid-ade20k-53898607.pt",
-    no_spill_frame
-)
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True
+
+    run(
+        "input_videos/{}".format(FLAGS.video),
+        "output_semseg",
+        "weights/dpt_hybrid-ade20k-53898607.pt",
+        no_spill_frame
+    )
+
+if __name__ == '__main__':
+    #torch.multiprocessing.set_start_method('spawn', force=True)
+    app.run(main)

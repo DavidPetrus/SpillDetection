@@ -21,6 +21,9 @@ import tensorflow_addons as tfa
 from dataloader import CustomDataGen
 from model import CustomModel
 
+import wandb
+from wandb.keras import WandbCallback
+
 #Use this to check if the GPU is configured correctly
 #from tensorflow.python.client import device_lib
 #print(device_lib.list_local_devices())
@@ -34,25 +37,35 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('exp','test','')
-flags.DEFINE_integer('batch_size',16,'')
+flags.DEFINE_integer('batch_size',8,'')
 flags.DEFINE_integer('epochs',1000,'')
-flags.DEFINE_float('lr',1*10**-4,'')
-flags.DEFINE_float('dropout',0.2,'')
-flags.DEFINE_float('label_smoothing',0.05,'')
+flags.DEFINE_float('lr',3*10**-4,'')
+flags.DEFINE_float('cls_dropout',0.25,'')
+flags.DEFINE_float('loc_dropout',0.15,'')
+flags.DEFINE_float('min_crop_size',0.1,'')
+flags.DEFINE_float('max_crop_size',0.3,'')
+flags.DEFINE_float('min_spill_frac',0.3,'')
+flags.DEFINE_float('locnet_aug',0.03,'')
+flags.DEFINE_float('loc_coeff',10.,'')
 
+flags.DEFINE_integer('num_prototypes',20,'')
+flags.DEFINE_integer('top_k',3,'')
 flags.DEFINE_float('gamma',300,'')
-flags.DEFINE_float('all_margin',0.35,'')
-flags.DEFINE_float('puddle_margin',0.25,'')
-flags.DEFINE_float('vid_margin',0.1,'')
-flags.DEFINE_float('puddle_coeff',0.5,'')
-flags.DEFINE_float('vid_coeff',0.5,'')
+flags.DEFINE_float('all_margin',0.25,'')
+#flags.DEFINE_float('puddle_margin',0.3,'')
+#flags.DEFINE_float('vid_margin',0.2,'')
+#flags.DEFINE_float('puddle_coeff',0.1,'')
+#flags.DEFINE_float('vid_coeff',0.5,'')
 
 
 def main(argv):
 
+    wandb.init(project="SpillDetection",name=FLAGS.exp)
+    wandb.config.update(flags.FLAGS)
+
     TRAIN_IMAGES_PATH = "./images/train"
     VAL_IMAGES_PATH = "./images/val"
-    NUMBER_OF_TRAINING_IMAGES = len(glob.glob(TRAIN_IMAGES_PATH+"/puddle/*"))
+    NUMBER_OF_TRAINING_IMAGES = len(glob.glob(TRAIN_IMAGES_PATH+"/spills/*"))
     NUMBER_OF_VALIDATION_IMAGES = len(glob.glob(VAL_IMAGES_PATH+"/spills/*"))
     print("Num train:",NUMBER_OF_TRAINING_IMAGES)
     print("Num val:",NUMBER_OF_VALIDATION_IMAGES)
@@ -61,37 +74,34 @@ def main(argv):
     width = 224
     epochs = FLAGS.epochs
 
-    conv_base = EfficientNetB0(weights="effnet_weights/efficientnetb0_notop.h5", include_top=False, input_shape=(height,width,3))
-
-    #model = models.Sequential()
-    model = CustomModel()
-    model.add(conv_base)
-    model.add(layers.GlobalMaxPooling2D(name="gap"))
-    #avoid overfitting
-    #model.add(layers.Dropout(rate=FLAGS.dropout, name="dropout_out"))
-    # Set NUMBER_OF_CLASSES to the number of your final predictions.
-    model.add(layers.Dense(320, activation="linear", name="fc_out"))
-    #conv_base.trainable = False
+    spill_classifier = CustomModel()
+    spill_classifier.build(input_shape=(None,720,720,3))
+    #spill_classifier.load_weights("effnet_weights/"+'2Sep2.h5')
 
     train_generator = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, train=True)
     validation_generator = CustomDataGen(VAL_IMAGES_PATH, batch_size, train=False)
 
-    model.compile(
+    spill_classifier.compile(
+        loss=tf.keras.losses.BinaryCrossentropy(),
         optimizer=optimizers.Adam(lr=FLAGS.lr)
     )
 
-    checkpoint = ModelCheckpoint('effnet_weights/'+FLAGS.exp+'.h5', monitor='val_loss', verbose=1, save_best_only=False, mode='min', period=1)
+    checkpoint = ModelCheckpoint('effnet_weights/'+FLAGS.exp+'.h5', monitor='val_loss', verbose=1, save_weights_only=True, save_best_only=False, mode='min', period=1)
 
-    history = model.fit(
+    #for epoch in range(1000):
+    #    for data in train_generator:
+    #        results = spill_classifier.train_step(data)
+
+    history = spill_classifier.fit(
         train_generator,
         steps_per_epoch=NUMBER_OF_TRAINING_IMAGES // batch_size,
         epochs=epochs,
         validation_data=validation_generator,
-        validation_steps=NUMBER_OF_VALIDATION_IMAGES // 8,
+        validation_steps=NUMBER_OF_VALIDATION_IMAGES // 4,
         verbose=1,
         use_multiprocessing=False,
         workers=8,
-        callbacks=[checkpoint])
+        callbacks=[WandbCallback(save_model=False),checkpoint])
 
 if __name__ == '__main__':
     #torch.multiprocessing.set_start_method('spawn', force=True)
