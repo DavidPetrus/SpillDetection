@@ -21,27 +21,20 @@ from absl import flags, app
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('clip_model','ViT-B/32','')
+flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('proj_head',0,'')
-flags.DEFINE_integer('num_prototypes',20,'')
+flags.DEFINE_integer('num_prototypes',40,'')
 
 flags.DEFINE_string('model_weights','','')
 flags.DEFINE_string('video','','')
 
-image_size = 720
-crop_size = 224
-
-pred_thresh = 2
-diff_thresh = 3
-sum_thresh = 1
-cond_thresh = 2
 
 mot_frame_buffer = 6
 mot_thresh = 20
 
 ens_thresh = 0.14
-potential_thresh = 0.15
-spill_thresh = 0.165
+potential_thresh = 0.25
+spill_thresh = 0.285
 
 def run(input_path, output_path, model_path, no_spill_frame, is_image=False, model_type="dpt_hybrid", optimize=True):
     """Run segmentation network
@@ -59,11 +52,15 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
     spill_det = SpillDetector(clip_model,device=device)
     spill_det.to(device)
     spill_det.load_state_dict(torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device)))
-    
+
+    skip_frames = 7
+
+    frame_scale = 2
 
     #crop_dims = [(3,5),(4,7),(5,8),(6,10)]
     #crop_dims = [(2,3),(3,5),(4,7)]
-    crop_dims = [(3,5)]
+    crop_dims = [(2,1),(3,1)]
+    #crop_dims = [(4,7)]
 
     ensemble_crops = [(0,0,1,1),(0,0,1.3,1.3),(0,0,1.6,1.6),(0,0,0.8,0.8), \
                       (0.25,0.25,1,1),(0.25,-0.25,1,1),(-0.25,0.25,1,1),(-0.25,-0.25,1,1), \
@@ -73,7 +70,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
         cap = cv2.VideoCapture(input_path)
         ret, frame = cap.read()
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights[:-3]+FLAGS.video, fourcc, 5.0, (frame.shape[1],frame.shape[0]))
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights[:-3]+FLAGS.video[:-4]+'.avi', fourcc, 24/skip_frames, (frame.shape[1],frame.shape[0]))
 
         motion_det = MotionDetector(frame,mot_frame_buffer,mot_thresh)
 
@@ -84,7 +81,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 break
 
             count += 1
-            if count % 7 > 0:
+            if count % skip_frames > 0:
                 continue
 
             cv2.imwrite('temp.png',frame)
@@ -97,17 +94,29 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 for cr_dim in crop_dims:
                     num_y,num_x = cr_dim
                     p_w,p_h = img_w//num_x, img_h//num_y
-                    if cr_dim[0] == 4:
+                    if cr_dim[1] == 7:
                         x_offset = 1
+                    elif cr_dim[1] == 8:
+                        x_offset = 2
                     else:
                         x_offset = 0
 
                     spill_patches = []
                     sampled_patches = []
-                    for y_ix in range(2*num_y-1):
+                    '''for y_ix in range(2*num_y-1):
                         for x_ix in range(2*x_offset, 2*num_x-1-2*x_offset):
                             sampled_patches.append(preprocess(img.crop((p_w*x_ix//2,p_h*y_ix//2,p_w*x_ix//2+p_w,p_h*y_ix//2+p_h))))
-                            bboxes.append((p_w*x_ix//2,p_h*y_ix//2,p_w*x_ix//2+p_w,p_h*y_ix//2+p_h))
+                            bboxes.append((p_w*x_ix//2,p_h*y_ix//2,p_w*x_ix//2+p_w,p_h*y_ix//2+p_h))'''
+
+                    for y_ix in range(num_y):
+                        for x_ix in range(x_offset, num_x-x_offset):
+                            sampled_patches.append(preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*x_ix+p_w,p_h*y_ix+p_h))))
+                            bboxes.append((p_w*x_ix,p_h*y_ix,p_w*x_ix+p_w,p_h*y_ix+p_h))
+
+                    for y_ix in range(num_y-1):
+                        for x_ix in range(x_offset, num_x-1-x_offset):
+                            sampled_patches.append(preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))))
+                            bboxes.append((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))
 
                     img_patches.extend(sampled_patches)
 
@@ -118,7 +127,7 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                 max_ix = torch.argmax(sims.max(dim=1)[0])
                 bbox = bboxes[max_ix]
 
-                if mean_sim > ens_thresh:
+                '''if mean_sim > ens_thresh:
                     ensemble_bboxes = []
                     ensemble_patches = []
                     for ens_crop in ensemble_crops:
@@ -137,27 +146,30 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                     max_sim,max_ix = sims.max(dim=1)[0].max(dim=0)
                     bbox = ensemble_bboxes[max_ix]
                     sims,_ = sims.max(dim=1)[0].sort(descending=True,dim=0)
-                    mean_sim = sims[:2].mean().cpu().numpy()
+                    mean_sim = sims[:2].mean().cpu().numpy()'''
                     
 
-            logits_str = "Mean_{:.3f}_Max_{:.3f}".format(mean_sim,max_sim)
+            logits_str = "Sim_{:.3f}".format(max_sim)
 
             if mean_sim > spill_thresh:
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
-                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
-                #cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
+                #cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
             elif mean_sim > potential_thresh:
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2)
-                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
-                #cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
+                #cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
             else:
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
-                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
-                #cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
+                #cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
 
 
             #for bbox in motion_bboxes:
             #    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 1)
+
+            if frame_scale > 1:
+                frame = cv2.resize(frame, (540,960)) 
             
             writer.write(frame)
             cv2.imshow('a',frame)
