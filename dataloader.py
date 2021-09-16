@@ -37,10 +37,10 @@ class CustomDataGen(torch.utils.data.Dataset):
         self.rds = [vid for vid in self.vids if not 'gallon' in vid]
 
         self.preprocess = preprocess
-        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(3,4)],'not_spill':[(2,3),(3,5),(4,7),(5,8)], \
+        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(2,3)],'not_spill':[(2,3),(3,5),(4,7)], \
                           'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)], \
                           'store':[(2,3),(3,5),(4,7)],'val_vid':[(2,3),(3,5),(4,7)]}
-        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,14,15],'gallon':[2,6,12,10],'react':[2,6,15,7], \
+        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'gallon':[2,6,12,10],'react':[2,6,15,7], \
                             'drinks':[6,14,10],'store':[6,14,10],'val_vid':[6,10,14]}
 
         self.vid_frames = {}
@@ -336,7 +336,8 @@ class CustomDataGen(torch.utils.data.Dataset):
             imgs = self.__get_image__(index+ix, dataset='spill')
             pos_images.append(imgs[0])
             neg_images.append(imgs[1])
-            neg_images.append(imgs[2])
+            if not self.train:
+                neg_images.append(imgs[2])
 
         X = torch.cat(pos_images+neg_images)
         lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
