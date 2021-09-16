@@ -39,9 +39,9 @@ cond_thresh = 2
 mot_frame_buffer = 6
 mot_thresh = 20
 
-ens_thresh = 0.16
-potential_thresh = 0.17
-spill_thresh = 0.19
+ens_thresh = 0.14
+potential_thresh = 0.15
+spill_thresh = 0.165
 
 def run(input_path, output_path, model_path, no_spill_frame, is_image=False, model_type="dpt_hybrid", optimize=True):
     """Run segmentation network
@@ -137,22 +137,22 @@ def run(input_path, output_path, model_path, no_spill_frame, is_image=False, mod
                     max_sim,max_ix = sims.max(dim=1)[0].max(dim=0)
                     bbox = ensemble_bboxes[max_ix]
                     sims,_ = sims.max(dim=1)[0].sort(descending=True,dim=0)
-                    mean_sim = sims[:3].mean().cpu().numpy()
+                    mean_sim = sims[:2].mean().cpu().numpy()
                     
 
             logits_str = "Mean_{:.3f}_Max_{:.3f}".format(mean_sim,max_sim)
 
             if mean_sim > spill_thresh:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2)
-                cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
                 #cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,0,255), 2)
             elif mean_sim > potential_thresh:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2)
-                cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
                 #cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,165,255), 2)
             else:
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2)
-                cv2.putText(frame, logits_str, (bbox[0],bbox[1]-3), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
                 #cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15), cv2.FONT_HERSHEY_PLAIN, 1, (0,255,0), 2)
 
 
