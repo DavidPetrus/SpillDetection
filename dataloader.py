@@ -37,13 +37,40 @@ class CustomDataGen(torch.utils.data.Dataset):
         self.rds = [vid for vid in self.vids if not 'gallon' in vid]
 
         self.preprocess = preprocess
-        self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(2,3)],'not_spill':[(2,3),(3,5),(4,7)], \
-                          'puddle':[(1,1),(1,2),(2,2),(1,3)],'not_puddle':[(1,1),(1,2),(2,2),(1,3)], \
-                          'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)], \
-                          'store':[(2,3),(3,5),(4,7)],'val_vid':[(2,3),(3,5),(4,7)]}
-        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'puddle':[1,2,4,3],'not_puddle':[1,2,4,3], \
-                            'gallon':[2,6,12,10],'react':[2,6,15,7], \
-                            'drinks':[6,14,10],'store':[6,14,10],'val_vid':[6,10,14]}
+        if FLAGS.scale == 'all':
+            self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(2,3)],'not_spill':[(2,3),(3,5),(4,7)], \
+                              'puddle':[(1,1),(1,2),(2,2),(3,1)],'not_puddle':[(1,1),(1,2),(2,2),(1,3)], \
+                              'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)],'store':[(2,3),(3,5),(4,7)], \
+                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+
+            self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'puddle':[1,2,4,3],'not_puddle':[1,2,4,3], \
+                                'gallon':[2,6,12,10],'react':[2,6,15,7], 'drinks':[6,14,10],'store':[6,14,10], \
+                                'pool':[2,3],'val_vid':[6,10,14]}
+        elif FLAGS.scale == 'large':
+            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+                              'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
+                              'gallon':[(1,2),(2,3)],'react':[(1,2),(2,3)],'drinks':[(2,3),(3,5)],'store':[(2,3),(3,5)], \
+                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+
+            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1,2],'not_puddle':[1,2], \
+                                'gallon':[2,6],'react':[2,6], 'drinks':[6,2],'store':[6,2], \
+                                'pool':[2,3],'val_vid':[6,10,14]}
+        elif FLAGS.scale == 'small':
+            self.crop_dims = {'spill':[(1,2),(2,2),(2,3)],'not_spill':[(3,5),(4,7)], \
+                              'puddle':[(1,3),(2,2),(3,1)],'not_puddle':[(1,2),(2,2),(1,3)], \
+                              'gallon':[(3,5),(4,7)],'react':[(3,5),(4,6)],'drinks':[(3,5),(4,7)],'store':[(3,5),(4,7)], \
+                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+
+            self.num_patches = {'spill':[2,4,4],'not_spill':[15,15],'puddle':[3,4,3],'not_puddle':[2,4,3], \
+                                'gallon':[15,15],'react':[15,15], 'drinks':[15,15],'store':[15,15], \
+                                'pool':[2,3],'val_vid':[6,10,14]}
+
+        if not train:
+            self.pool_spills = glob.glob(directory+'/pool_spills/*')
+            self.pool_no_spills = glob.glob(directory+'/pool_no_spills/*')
+            self.water_spills = glob.glob(directory+'/water_spills/*')
+            self.other_spills = glob.glob(directory+'/other_spills/*')
+            self.store_no_spills = glob.glob(directory+'/store_no_spills/*')
 
         self.vid_frames = {}
         self.pos_frames = {}
@@ -83,8 +110,10 @@ class CustomDataGen(torch.utils.data.Dataset):
         if self.train:
             self.n = len(self.spill_images)
         else:
-            self.batch_size = batch_size//2
-            self.n = len(self.spill_images)
+            self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
+            self.num_vals = [60,30,15,30,15,20]
+            self.batch_size = 1
+            self.n = len(self.val_samples)
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
@@ -100,13 +129,24 @@ class CustomDataGen(torch.utils.data.Dataset):
             pos_img = Image.open(self.puddle_images[np.random.randint(len(self.puddle_images))])
             neg_img = Image.open(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
             all_images = [pos_img,neg_img]
+        elif dataset == 'pool':
+            pos_img = Image.open(self.pool_spills[np.random.randint(len(self.pool_spills))])
+            neg_img = Image.open(self.pool_no_spills[np.random.randint(len(self.pool_no_spills))])
+            all_images = [pos_img,neg_img]
+        elif 'water' in dataset:
+            pos_img = Image.open(self.water_spills[np.random.randint(len(self.water_spills))])
+            neg_img = Image.open(self.store_no_spills[np.random.randint(len(self.store_no_spills))])
+            all_images = [pos_img,neg_img]
+        elif 'other' in dataset:
+            pos_img = Image.open(self.other_spills[np.random.randint(len(self.other_spills))])
+            neg_img = Image.open(self.store_no_spills[np.random.randint(len(self.store_no_spills))])
+            all_images = [pos_img,neg_img]
 
         imgs = []
         for i_ix,img in enumerate(all_images):
             cat = 0 if i_ix==0 else 1
 
             img_w,img_h = img.size
-            img_size = min(img_h,img_w)
 
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
 
@@ -140,7 +180,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     num_patches = self.num_patches['puddle'] if cat == 0 else self.num_patches['not_puddle']
                     all_patches = []
                     for num_p,cr_dim in zip(num_patches,crop_dims):
-                        num_x,num_y = cr_dim
+                        num_y,num_x = cr_dim
                         p_w,p_h = cr_w//num_x, cr_h//num_y
                         for x_ix in range(num_x):
                             for y_ix in range(num_y):
@@ -245,38 +285,36 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 if p_count in patch_samples:
                                     all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
                                 p_count += 1
-                elif dataset == 'video':
-                    cat = cats[i_ix]
-                    frame_bboxes = all_bboxes[i_ix]
-                    for bb in frame_bboxes:
-                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-
-                    crop_dims = self.crop_dims['val_vid']
-                    num_patches = self.num_patches['val_vid']
+                elif dataset == 'pool':
                     all_patches = []
-                    for num_p,cr_dim in zip(num_patches,crop_dims):
-                        min_dim,max_dim = cr_dim
-                        num_x = min_dim if img_h > img_w else max_dim
-                        num_y = max_dim if img_h > img_w else min_dim
+                    for cr_dim in [(2,1),(3,1)]:
+                        num_y,num_x = cr_dim
                         p_w,p_h = img_w//num_x, img_h//num_y
-                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
-                        spill_patches = []
-                        sampled_patches = []
-                        p_count = 0
                         for y_ix in range(num_y):
                             for x_ix in range(num_x):
-                                if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
-                                    spill_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                                elif p_count in patch_samples:
-                                    sampled_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-
-                                p_count += 1
-                                if len(spill_patches) == num_p:
-                                    break
-                            if len(spill_patches) == num_p:
-                                break
-
-                        all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
+                                all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                elif 'large' in dataset:
+                    all_patches = []
+                    for cr_dim in [(2,3),(3,5)]:
+                        num_y,num_x = cr_dim
+                        offset = 1 if num_y==2 else 0
+                        p_w,p_h = img_w//num_x, img_h//num_y
+                        for y_ix in range(num_y):
+                            for x_ix in range(num_x):
+                                if y_ix < offset and x_ix < offset:
+                                    continue
+                                all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                elif 'small' in dataset:
+                    all_patches = []
+                    for cr_dim in [(4,7),(5,8)]:
+                        num_y,num_x = cr_dim
+                        offset = (3,2) if num_y==5 else (0,0)
+                        p_w,p_h = img_w//num_x, img_h//num_y
+                        for y_ix in range(num_y-1):
+                            for x_ix in range(num_x-1):
+                                if y_ix<offset[0] and x_ix<offset[1]:
+                                    continue
+                                all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))))
 
                 crops = torch.stack(all_patches)
 
@@ -288,75 +326,82 @@ class CustomDataGen(torch.utils.data.Dataset):
     #    self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
     
     def __getitem__(self, index):
-        cats = []
-        frames = []
-        bboxes = []
-        all_bboxes = []
-        vids = []
-        for v in range(2):
-            vid = self.videos[np.random.randint(len(self.videos))]
-            for vid_group in ['gallon','drinks','react','store']:
-                if vid_group in vid:
-                    vids.append(vid_group)
-                    break
-
-            with open(vid[:-4]+'.txt','r') as fp:
-                lines = fp.read().splitlines()
-
-            no_spill_frames = []
-            spill_frames = defaultdict(list)
-            for line in lines:
-                if 'no_spill' in line:
-                    fr,lab = line.split(' ')
-                    no_spill_frames.append(int(fr[2:]))
-                elif 'spill' in line:
-                    fr,lab,lux,luy,rbx,rby = line.split(' ')
-                    spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
-
-            neg_fr_idxs = random.sample(no_spill_frames,2)
-            pos_fr_idxs = random.sample(list(spill_frames.keys()),2)
-            pos_bboxes = []
-            for fr in pos_fr_idxs:
-                pos_bboxes.extend(spill_frames[fr])
-
-            vid_frames = glob.glob(vid[:-4]+'/*.png')
-            for frame_name in vid_frames:
-                count = int(frame_name.split('/')[-1][:-4])
-                if count in pos_fr_idxs:
-                    all_bboxes.append(spill_frames[count])
-                    bbox = random.choice(spill_frames[count])
-                    cats.append(0)
-                elif count in neg_fr_idxs:
-                    if len(pos_bboxes)==0:
-                        frame = Image.open(frame_name)
-                        lux = np.random.randint(frame.size[0]-100)
-                        luy = np.random.randint(frame.size[1]-100)
-                        s = np.random.randint(100)
-                        bbox = (lux,luy,lux+s,luy+s)
-                    else:
-                        bbox = random.choice(pos_bboxes)
-                    all_bboxes.append([])
-                    cats.append(1)
-                else:
-                    continue
-
-                frame = Image.open(frame_name)
-                frames.append(frame)
-                bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
-
-        imgs = self.__get_image__(index, dataset='video', sampled_frames=(vids,frames,bboxes,cats,all_bboxes))
-        pos_images = [img for img,cat in zip(imgs,cats) if cat==0]
-        neg_images = [img for img,cat in zip(imgs,cats) if cat==1]
-        for ix in range(self.batch_size):
-            imgs = self.__get_image__(index+ix, dataset='spill')
-            pos_images.append(imgs[0])
-            neg_images.append(imgs[1])
-            if not self.train:
-                neg_images.append(imgs[2])
-
         if self.train:
+            cats = []
+            frames = []
+            bboxes = []
+            all_bboxes = []
+            vids = []
+            for v in range(2):
+                vid = self.videos[np.random.randint(len(self.videos))]
+                for vid_group in ['gallon','drinks','react','store','pool']:
+                    if vid_group in vid:
+                        vids.append(vid_group)
+                        break
+
+                with open(vid[:-4]+'.txt','r') as fp:
+                    lines = fp.read().splitlines()
+
+                no_spill_frames = []
+                spill_frames = defaultdict(list)
+                for line in lines:
+                    if 'no_spill' in line:
+                        fr,lab = line.split(' ')
+                        no_spill_frames.append(int(fr[2:]))
+                    elif 'spill' in line:
+                        fr,lab,lux,luy,rbx,rby = line.split(' ')
+                        spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
+
+                neg_fr_idxs = random.sample(no_spill_frames,2)
+                pos_fr_idxs = random.sample(list(spill_frames.keys()),2)
+                pos_bboxes = []
+                for fr in pos_fr_idxs:
+                    pos_bboxes.extend(spill_frames[fr])
+
+                vid_frames = glob.glob(vid[:-4]+'/*.png')
+                for frame_name in vid_frames:
+                    count = int(frame_name.split('/')[-1][:-4])
+                    if count in pos_fr_idxs:
+                        all_bboxes.append(spill_frames[count])
+                        bbox = random.choice(spill_frames[count])
+                        cats.append(0)
+                    elif count in neg_fr_idxs:
+                        if len(pos_bboxes)==0:
+                            frame = Image.open(frame_name)
+                            lux = np.random.randint(frame.size[0]-100)
+                            luy = np.random.randint(frame.size[1]-100)
+                            s = np.random.randint(100)
+                            bbox = (lux,luy,lux+s,luy+s)
+                        else:
+                            bbox = random.choice(pos_bboxes)
+                        all_bboxes.append([])
+                        cats.append(1)
+                    else:
+                        continue
+
+                    frame = Image.open(frame_name)
+                    frames.append(frame)
+                    bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
+        
+            imgs = self.__get_image__(index, dataset='video', sampled_frames=(vids,frames,bboxes,cats,all_bboxes))
+            pos_images = [img for img,cat in zip(imgs,cats) if cat==0]
+            neg_images = [img for img,cat in zip(imgs,cats) if cat==1]
+            for ix in range(self.batch_size):
+                imgs = self.__get_image__(index+ix, dataset='spill')
+                pos_images.append(imgs[0])
+                neg_images.append(imgs[1])
+                if FLAGS.scale == 'large':
+                    neg_images.append(imgs[2])
+
             for ix in range(self.batch_size//2):
                 imgs = self.__get_image__(index+ix, dataset='puddle')
+                pos_images.append(imgs[0])
+                neg_images.append(imgs[1])
+        else:
+            pos_images = []
+            neg_images = []
+            for ix in range(self.num_vals[index]):
+                imgs = self.__get_image__(index, dataset=self.val_samples[index])
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
 

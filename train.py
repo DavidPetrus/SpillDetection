@@ -20,17 +20,18 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',50,'')
+flags.DEFINE_integer('epochs',30,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('proj_head',0,'')
-flags.DEFINE_integer('num_prototypes',40,'')
+flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('top_k_spill',2,'')
 flags.DEFINE_integer('top_k_vids',4,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
+flags.DEFINE_string('scale','all','')
 
 def main(argv):
 
@@ -66,9 +67,28 @@ def main(argv):
 
     color_aug = torchvision.transforms.ColorJitter(0.4,0.4,0.4,0.1)
 
-    lab = torch.zeros(8*FLAGS.top_k_spill,dtype=torch.int64).to('cuda')
-    vid_mask = torch.zeros(4,30,FLAGS.num_prototypes).to('cuda')
-    spill_mask = torch.zeros(8,10,FLAGS.num_prototypes).to('cuda')
+    val_data = ['pool','large_water','small_water','large_other','small_other','spill']
+    num_vals = [60,30,15,30,15,20]
+    val_patches = [5,20,40,20,40,10]
+
+    if FLAGS.scale == 'all':
+        num_vid_patches = 30
+        num_spill_patches = 10
+        num_puddle_patches = 10
+    elif FLAGS.scale == 'small':
+        num_vid_patches = 30
+        num_spill_patches = 10
+        num_puddle_patches = 10
+    elif FLAGS.scale == 'large':
+        num_vid_patches = 8
+        num_spill_patches = 1
+        num_puddle_patches = 3
+        FLAGS.top_k_vids = 1
+        FLAGS.top_k_spill = 1
+
+    lab = torch.zeros(60,dtype=torch.int64).to('cuda')
+    vid_mask = torch.zeros(4,num_vid_patches,FLAGS.num_prototypes).to('cuda')
+    spill_mask = torch.zeros(8,num_spill_patches,FLAGS.num_prototypes).to('cuda')
 
     min_acc = 0.
     total_loss = 0.
@@ -84,10 +104,10 @@ def main(argv):
             #img_patches = img_patches.to('cuda')
 
             sims = spill_det(img_patches)
-            pos_sims_vids = sims[:120].reshape(4,30,FLAGS.num_prototypes)
-            pos_sims_spills = sims[120:200].reshape(8,10,FLAGS.num_prototypes)
-            pos_sims_puddles = sims[200:240].reshape(4,10,FLAGS.num_prototypes)
-            neg_sims = sims[240:].max(dim=1)[0].reshape(1,-1).tile(4,1)
+            pos_sims_vids = sims[:4*num_vid_patches].reshape(4,num_vid_patches,FLAGS.num_prototypes)
+            pos_sims_spills = sims[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,FLAGS.num_prototypes)
+            pos_sims_puddles = sims[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,FLAGS.num_prototypes)
+            neg_sims = sims[4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
             # Compute vid loss
             logits = []
@@ -122,7 +142,7 @@ def main(argv):
                 top_mask[pos_sims_spills == p_sim] = -10.
 
             logits = torch.cat(logits,dim=0)
-            spill_loss = F.cross_entropy(logits,lab)
+            spill_loss = F.cross_entropy(logits,lab[:8*FLAGS.top_k_spill])
             spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
             final_loss = vid_loss + spill_loss + FLAGS.puddle_coeff*puddle_loss
@@ -149,58 +169,44 @@ def main(argv):
                 for g in optimizer.param_groups:
                     g['lr'] = 0.001
 
-        val_acc = 0.
+        val_accs = []
+        val_losses = []
         val_count = 0
         for data in validation_generator:
             with torch.no_grad():
                 img_patches,_ = data
 
                 sims = spill_det(img_patches.to('cuda'))
-                pos_sims_vids = sims[:120].reshape(4,30,FLAGS.num_prototypes)
-                pos_sims_spills = sims[120:160].reshape(4,10,FLAGS.num_prototypes)
-                neg_sims = sims[160:].max(dim=1)[0].reshape(1,-1).tile(4,1)
+                if val_count == 0:
+                    pos_sims = sims[:300].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
+                    neg_sims = sims[300:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
+                elif val_count < 5:
+                    pos_sims = sims[:600].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
+                    neg_sims = sims[600:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
+                else:
+                    pos_sims = sims[:200].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
+                    neg_sims = sims[200:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
 
-                logits = []
-                top_mask = vid_mask.clone()
-                for k in range(2):
-                    p_sim = (pos_sims_vids+top_mask).max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
-                    logits.append(torch.cat([p_sim[:,:,0],neg_sims],dim=1)/FLAGS.temperature)
-                    top_mask[pos_sims_vids == p_sim] = -10.
+                p_sim = pos_sims.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
+                logits = torch.cat([p_sim[:,:,0],neg_sims],dim=1)/FLAGS.temperature
 
-                logits = torch.cat(logits,dim=0)
-                vid_loss = F.cross_entropy(logits,lab[:2*4])
-                vid_acc = (torch.argmax(logits,dim=1)==0).float().mean()
+                val_loss = F.cross_entropy(logits,lab[:num_vals[val_count]])
+                val_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
-                #neg_sims = neg_sims.tile(2,1)
-                logits = []
-                top_mask = spill_mask[:4].clone()
-                for k in range(2):
-                    p_sim = (pos_sims_spills+top_mask).max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
-                    logits.append(torch.cat([p_sim[:,:,0],neg_sims],dim=1)/FLAGS.temperature)
-                    top_mask[pos_sims_spills == p_sim] = -10.
-
-                logits = torch.cat(logits,dim=0)
-                spill_loss = F.cross_entropy(logits,lab[:2*4])
-                spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
-
-                final_loss = vid_loss + spill_loss
-
-                val_acc += spill_acc+vid_acc
+                val_losses.append(val_loss)
+                val_accs.append(val_acc)
                 val_count += 1
 
-                val_iter += 1
-                log_dict = {"Epoch":epoch,"Val_iter":val_iter,"Val Loss": final_loss, "Val Video Loss": vid_loss, "Val Spill Loss":spill_loss, \
-                            "Val Video Accuracy": vid_acc, "Val Spill Accuracy": spill_acc}
+        log_dict = {"Epoch":epoch,"Val Loss": sum(val_losses)/len(val_losses), "Val Acc": sum(val_accs)/len(val_accs)}
+        for v_ix in range(len(val_accs)):
+            log_dict["Val loss "+val_data[v_ix]] = val_losses[v_ix]
+            log_dict["Val acc "+val_data[v_ix]] = val_accs[v_ix]
 
-                wandb.log(log_dict)
+        wandb.log(log_dict)
 
-        val_acc = val_acc/(2*val_count)
-        print("Val Mean Acc",val_acc)
-        wandb.log({"Val Mean Acc":val_acc})
-
-        if val_acc > min_acc:
+        if sum(val_accs) > min_acc:
             torch.save(spill_det.state_dict(),'weights/{}.pt'.format(FLAGS.exp))
-            min_acc = val_acc
+            min_acc = sum(val_accs)
 
 
 if __name__ == '__main__':
