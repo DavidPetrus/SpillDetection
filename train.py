@@ -22,14 +22,15 @@ flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
 flags.DEFINE_integer('epochs',50,'')
 flags.DEFINE_float('lr',0.01,'')
-flags.DEFINE_float('temperature',0.1,'')
+flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('proj_head',0,'')
 flags.DEFINE_integer('num_prototypes',40,'')
 flags.DEFINE_integer('top_k_spill',2,'')
 flags.DEFINE_integer('top_k_vids',4,'')
-flags.DEFINE_float('margin',0.,'')
+flags.DEFINE_float('margin',0.025,'')
+flags.DEFINE_float('puddle_coeff',0.3,'')
 
 def main(argv):
 
@@ -79,14 +80,16 @@ def main(argv):
         for data in training_generator:
             img_patches,_ = data
 
-            #img_patches = color_aug(img_patches.to('cuda'))
-            img_patches = img_patches.to('cuda')
+            img_patches = color_aug(img_patches.to('cuda'))
+            #img_patches = img_patches.to('cuda')
 
             sims = spill_det(img_patches)
             pos_sims_vids = sims[:120].reshape(4,30,FLAGS.num_prototypes)
             pos_sims_spills = sims[120:200].reshape(8,10,FLAGS.num_prototypes)
-            neg_sims = sims[200:].max(dim=1)[0].reshape(1,-1).tile(4,1)
+            pos_sims_puddles = sims[200:240].reshape(4,10,FLAGS.num_prototypes)
+            neg_sims = sims[240:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
+            # Compute vid loss
             logits = []
             top_mask = vid_mask.clone()
             for k in range(FLAGS.top_k_vids):
@@ -99,6 +102,16 @@ def main(argv):
             vid_loss = F.cross_entropy(logits,lab[:4*FLAGS.top_k_vids])
             vid_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
+            # Compute puddle loss
+            logits = []
+            p_sim = pos_sims_puddles.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
+            logits.append(torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature)
+
+            logits = torch.cat(logits,dim=0)
+            puddle_loss = F.cross_entropy(logits,lab[:4])
+            puddle_acc = (torch.argmax(logits,dim=1)==0).float().mean()
+
+            # Compute spill loss
             neg_sims = neg_sims.tile(2,1)
             logits = []
             top_mask = spill_mask.clone()
@@ -112,11 +125,12 @@ def main(argv):
             spill_loss = F.cross_entropy(logits,lab)
             spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
-            final_loss = vid_loss + spill_loss
+            final_loss = vid_loss + spill_loss + FLAGS.puddle_coeff*puddle_loss
 
             train_iter += 1
-            log_dict = {"Epoch":epoch,"Train Iteration":train_iter, "Final Loss": final_loss, "Video Loss": vid_loss, "Spill Loss":spill_loss, \
-                        "Video Accuracy": vid_acc, "Spill Accuracy": spill_acc}
+            log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
+                        "Video Loss": vid_loss, "Spill Loss":spill_loss, "Puddle Loss":puddle_loss, \
+                        "Video Accuracy": vid_acc, "Spill Accuracy": spill_acc, "Puddle Accuracy": puddle_acc}
 
             final_loss.backward()
             optimizer.step()

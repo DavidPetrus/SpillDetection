@@ -38,9 +38,11 @@ class CustomDataGen(torch.utils.data.Dataset):
 
         self.preprocess = preprocess
         self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(2,3)],'not_spill':[(2,3),(3,5),(4,7)], \
+                          'puddle':[(1,1),(1,2),(2,2),(1,3)],'not_puddle':[(1,1),(1,2),(2,2),(1,3)], \
                           'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)], \
                           'store':[(2,3),(3,5),(4,7)],'val_vid':[(2,3),(3,5),(4,7)]}
-        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'gallon':[2,6,12,10],'react':[2,6,15,7], \
+        self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'puddle':[1,2,4,3],'not_puddle':[1,2,4,3], \
+                            'gallon':[2,6,12,10],'react':[2,6,15,7], \
                             'drinks':[6,14,10],'store':[6,14,10],'val_vid':[6,10,14]}
 
         self.vid_frames = {}
@@ -97,8 +99,7 @@ class CustomDataGen(torch.utils.data.Dataset):
         elif dataset == 'puddle':
             pos_img = Image.open(self.puddle_images[np.random.randint(len(self.puddle_images))])
             neg_img = Image.open(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
-            neg_img2 = Image.open(self.not_puddle_images[np.random.randint(len(self.not_puddle_images))])
-            all_images = [pos_img,neg_img,neg_img2]
+            all_images = [pos_img,neg_img]
 
         imgs = []
         for i_ix,img in enumerate(all_images):
@@ -130,6 +131,20 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 if p_count in patch_samples:
                                     all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                 p_count += 1
+                elif dataset == 'puddle':
+                    cr_h,cr_w = np.random.randint(int(0.85*img_h),img_h+1),np.random.randint(int(0.85*img_w),img_w+1)
+                    cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
+                    crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+
+                    crop_dims = self.crop_dims['puddle'] if cat == 0 else self.crop_dims['not_puddle']
+                    num_patches = self.num_patches['puddle'] if cat == 0 else self.num_patches['not_puddle']
+                    all_patches = []
+                    for num_p,cr_dim in zip(num_patches,crop_dims):
+                        num_x,num_y = cr_dim
+                        p_w,p_h = cr_w//num_x, cr_h//num_y
+                        for x_ix in range(num_x):
+                            for y_ix in range(num_y):
+                                all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                 elif dataset == 'video':
                     frame_bboxes = all_bboxes[i_ix]
@@ -338,6 +353,12 @@ class CustomDataGen(torch.utils.data.Dataset):
             neg_images.append(imgs[1])
             if not self.train:
                 neg_images.append(imgs[2])
+
+        if self.train:
+            for ix in range(self.batch_size//2):
+                imgs = self.__get_image__(index+ix, dataset='puddle')
+                pos_images.append(imgs[0])
+                neg_images.append(imgs[1])
 
         X = torch.cat(pos_images+neg_images)
         lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
