@@ -18,18 +18,11 @@ class SpillDetector(nn.Module):
         self.clip_model = clip_model
         self.dtype = torch.half if device=='cuda' else torch.float32
 
-        if FLAGS.proj_head > 0:
-            self.proj_head = nn.Linear(512,FLAGS.proj_head,bias=False,dtype=self.dtype)
-            self.prototypes = nn.Parameter(torch.randn(self.num_prototypes, FLAGS.proj_head).to(device), requires_grad=True)
-        else:
-            self.prototypes = nn.Parameter(torch.randn(self.num_prototypes, 512).to(device), requires_grad=True)
+        self.prototypes = nn.Parameter(torch.randn(self.num_prototypes, 512).to(device), requires_grad=True)
 
     def forward(self, x):
         with torch.no_grad():
             img_features = self.clip_model.encode_image(x)
-        
-        if FLAGS.proj_head > 0:
-            img_features = self.proj_head(img_features)
 
         img_features = F.normalize(img_features)
 

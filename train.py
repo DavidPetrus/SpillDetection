@@ -25,7 +25,6 @@ flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
-flags.DEFINE_integer('proj_head',0,'')
 flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
