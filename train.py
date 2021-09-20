@@ -20,15 +20,15 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',30,'')
+flags.DEFINE_integer('epochs',50,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('proj_head',0,'')
 flags.DEFINE_integer('num_prototypes',30,'')
-flags.DEFINE_integer('top_k_spill',2,'')
-flags.DEFINE_integer('top_k_vids',4,'')
+flags.DEFINE_integer('top_k_spill',1,'')
+flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
 flags.DEFINE_string('scale','all','')
@@ -83,8 +83,14 @@ def main(argv):
         num_vid_patches = 8
         num_spill_patches = 1
         num_puddle_patches = 3
-        FLAGS.top_k_vids = 1
-        FLAGS.top_k_spill = 1
+    elif FLAGS.scale == 'xlarge':
+        num_vid_patches = 2
+        num_spill_patches = 1
+        num_puddle_patches = 1
+    elif FLAGS.scale == 'med':
+        num_vid_patches = 3
+        num_spill_patches = 2
+        num_puddle_patches = 2
 
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
     vid_mask = torch.zeros(4,num_vid_patches,FLAGS.num_prototypes).to('cuda')

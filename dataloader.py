@@ -46,6 +46,15 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'puddle':[1,2,4,3],'not_puddle':[1,2,4,3], \
                                 'gallon':[2,6,12,10],'react':[2,6,15,7], 'drinks':[6,14,10],'store':[6,14,10], \
                                 'pool':[2,3],'val_vid':[6,10,14]}
+        elif FLAGS.scale == 'xlarge':
+            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+                              'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
+                              'gallon':[(1,2)],'react':[(1,2)],'drinks':[(2,3)],'store':[(2,3)], \
+                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+
+            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
+                                'gallon':[2],'react':[2], 'drinks':[2],'store':[2], \
+                                'pool':[2,3],'val_vid':[6,10,14]}
         elif FLAGS.scale == 'large':
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
@@ -54,6 +63,15 @@ class CustomDataGen(torch.utils.data.Dataset):
 
             self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1,2],'not_puddle':[1,2], \
                                 'gallon':[2,6],'react':[2,6], 'drinks':[6,2],'store':[6,2], \
+                                'pool':[2,3],'val_vid':[6,10,14]}
+        elif FLAGS.scale == 'med':
+            self.crop_dims = {'spill':[(1,1),(1,2)],'not_spill':[(2,3),(3,5),(4,7)], \
+                              'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
+                              'gallon':[(1,2),(2,3)],'react':[(1,2),(2,3)],'drinks':[(2,3),(3,5)],'store':[(2,3),(3,5)], \
+                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+
+            self.num_patches = {'spill':[1,1],'not_spill':[6,15,9],'puddle':[1,1],'not_puddle':[1,2], \
+                                'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
                                 'pool':[2,3],'val_vid':[6,10,14]}
         elif FLAGS.scale == 'small':
             self.crop_dims = {'spill':[(1,2),(2,2),(2,3)],'not_spill':[(3,5),(4,7)], \
