@@ -41,7 +41,7 @@ def run(input_path):
 
     spill_det = SpillDetector(clip_model,device=device)
     spill_det.to(device)
-    spill_det.load_state_dict(torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device)))
+    spill_det.prototypes = torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device))['prototypes']
 
     skip_frames = 20
 

@@ -20,7 +20,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',50,'')
+flags.DEFINE_integer('epochs',100,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
@@ -59,12 +59,11 @@ def main(argv):
     spill_det = SpillDetector(clip_model)
     spill_det.to('cuda')
 
-    if FLAGS.proj_head > 0:
-        optimizer = torch.optim.Adam(params=[spill_det.prototypes]+[spill_det.proj_head], lr=FLAGS.lr)
-    else:
-        optimizer = torch.optim.Adam(params=[spill_det.prototypes], lr=FLAGS.lr)
+    #spill_det.load_state_dict(torch.load('weights/20Sep3.pt',map_location=torch.device('cuda')))
 
-    color_aug = torchvision.transforms.ColorJitter(0.4,0.4,0.4,0.1)
+    optimizer = torch.optim.Adam(params=[spill_det.prototypes], lr=FLAGS.lr)
+
+    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.15)
 
     val_data = ['pool','large_water','small_water','large_other','small_other','spill']
     num_vals = [60,30,15,30,15,20]
@@ -210,7 +209,7 @@ def main(argv):
         wandb.log(log_dict)
 
         if sum(val_accs) > min_acc:
-            torch.save(spill_det.state_dict(),'weights/{}.pt'.format(FLAGS.exp))
+            torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
             min_acc = sum(val_accs)
 
 
