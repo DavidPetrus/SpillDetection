@@ -25,10 +25,14 @@ flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('num_prototypes',30,'')
 
 flags.DEFINE_string('model_weights','','')
-flags.DEFINE_float('potential_thresh',0.2,'')
-flags.DEFINE_float('spill_thresh',0.255,'')
+flags.DEFINE_float('potential_thresh',0.11,'')
+flags.DEFINE_float('spill_thresh',0.13,'')
 flags.DEFINE_string('video','','')
 
+
+# 22September2.pt
+# Pool: 0.13, 0.17
+# Store: 0.11, 0.13
 
 #mot_frame_buffer = 6
 #mot_thresh = 20
@@ -43,7 +47,7 @@ def run(input_path):
     spill_det.to(device)
     spill_det.prototypes = torch.load('weights/'+FLAGS.model_weights,map_location=torch.device(device))['prototypes']
 
-    skip_frames = 20
+    skip_frames = 7
 
     frame_scale = 1
 
@@ -55,7 +59,10 @@ def run(input_path):
     cap = cv2.VideoCapture(input_path)
     ret, frame = cap.read()
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    writer = cv2.VideoWriter('output_videos/'+FLAGS.model_weights[:-3]+FLAGS.video[:-4]+'.avi', fourcc, 24/skip_frames, (frame.shape[1],frame.shape[0]))
+    if frame_scale > 1:
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.video[:-4]+'_'+FLAGS.model_weights[:-3]+'.avi', fourcc, 24/skip_frames, (540,960))
+    else:
+        writer = cv2.VideoWriter('output_videos/'+FLAGS.video[:-4]+'_'+FLAGS.model_weights[:-3]+'.avi', fourcc, 24/skip_frames, (frame.shape[1],frame.shape[0]))
 
     #motion_det = MotionDetector(frame,mot_frame_buffer,mot_thresh)
 
@@ -66,7 +73,7 @@ def run(input_path):
             break
 
         count += 1
-        if count % skip_frames > 0:
+        if count % skip_frames > 0 or count < 2640:
             continue
 
         cv2.imwrite('temp.png',frame)
@@ -84,23 +91,17 @@ def run(input_path):
                     num_y = max(cr_dim)
                     num_x = min(cr_dim)
                 p_w,p_h = img_w//num_x, img_h//num_y
-                if cr_dim[1] == 7:
-                    x_offset = 1
-                elif cr_dim[1] == 8:
-                    x_offset = 2
-                else:
-                    x_offset = 0
 
                 spill_patches = []
                 sampled_patches = []
 
                 for y_ix in range(num_y):
-                    for x_ix in range(x_offset, num_x-x_offset):
+                    for x_ix in range(num_x):
                         sampled_patches.append(preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*x_ix+p_w,p_h*y_ix+p_h))))
                         bboxes.append((p_w*x_ix,p_h*y_ix,p_w*x_ix+p_w,p_h*y_ix+p_h))
 
                 for y_ix in range(num_y-1):
-                    for x_ix in range(x_offset, num_x-1-x_offset):
+                    for x_ix in range(num_x-1):
                         sampled_patches.append(preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))))
                         bboxes.append((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))
 
@@ -108,24 +109,28 @@ def run(input_path):
 
             img_patches = torch.stack(img_patches).to(device)
             sims = spill_det(img_patches)
-            max_sim = sims.max().cpu().numpy()
-            max_ix = torch.argmax(sims.max(dim=1)[0])
+
+            max_sims,max_idxs = torch.topk(sims.max(dim=1)[0], 3, sorted=True)
+
+            max_sims = max_sims.cpu().numpy()
+            max_idxs = max_idxs.cpu().numpy()
+
+        for max_sim,max_ix in zip(max_sims,max_idxs):
+            logits_str = "{:.3f}".format(max_sim)
             bbox = bboxes[max_ix]
 
-        logits_str = "Sim_{:.3f}".format(max_sim)
-
-        if max_sim > FLAGS.spill_thresh:
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2*frame_scale)
-            #cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
-            cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
-        elif max_sim > FLAGS.potential_thresh:
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2*frame_scale)
-            #cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
-            cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
-        else:
-            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2*frame_scale)
-            #cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
-            cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
+            if max_sim > FLAGS.spill_thresh:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,0,255), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
+                #cv2.putText(frame, "Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,0,255), 2*frame_scale)
+            elif max_sim > FLAGS.potential_thresh:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,165,255), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
+                #cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
+            elif max_sim > FLAGS.potential_thresh - 0.02:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2*frame_scale)
+                cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
+                #cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
 
 
         #for bbox in motion_bboxes:
