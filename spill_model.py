@@ -10,10 +10,13 @@ FLAGS = flags.FLAGS
 
 class SpillDetector(nn.Module):
 
-    def __init__(self,clip_model,device='cuda'):
+    def __init__(self,clip_model,num_prototypes=None,device='cuda'):
         super(SpillDetector, self).__init__()
 
-        self.num_prototypes = FLAGS.num_prototypes
+        if num_prototypes:
+            self.num_prototypes = num_prototypes
+        else:
+            self.num_prototypes = FLAGS.num_prototypes
 
         self.clip_model = clip_model
         self.dtype = torch.half if device=='cuda' else torch.float32

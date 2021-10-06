@@ -43,7 +43,8 @@ class CustomDataGen(torch.utils.data.Dataset):
             for t in ['clear','dark','opaque']:
                 self.val_frames[t] = {}
 
-                vids = glob.glob(directory+"/{}_spills/*.txt".format(t))
+                v_dir = directory+"/{}_spills".format(t)
+                vids = glob.glob(v_dir+"/*.txt")
 
                 for v in vids:
                     self.val_frames[t][v[:-4]] = []
@@ -55,9 +56,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                     no_spill_frames = []
                     spill_frames = {}
                     for line in lines:
-                        if 'spill' in line:
+                        if ' spill' in line:
                             fr,lab,lux,luy,rbx,rby = line.split(' ')
-                            if "/"+fr[2:]+".png" in imgs:
+                            if v[:-4]+"/{}.png".format(fr[2:]) in imgs:
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
         self.color_distorts = color_distorts
@@ -75,11 +76,11 @@ class CustomDataGen(torch.utils.data.Dataset):
         elif FLAGS.scale == 'xlarge':
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
-                              'gallon':[(1,2)],'react':[(1,2)],'drinks':[(2,3)],'store':[(2,3)], \
+                              'gallon':[(1,1),(1,2)],'react':[(1,1),(1,2)],'drinks':[(1,1),(2,3)],'store':[(1,1),(2,3)], \
                               'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
 
             self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
-                                'gallon':[2],'react':[2], 'drinks':[2],'store':[2], \
+                                'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
                                 'pool':[2,3],'val_vid':[6,10,14]}
         elif FLAGS.scale == 'large':
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
@@ -116,39 +117,40 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.other_spills = glob.glob(directory+'/other_spills/*')
             self.store_no_spills = glob.glob(directory+'/store_no_spills/*')
 
-        self.vid_frames = {}
-        self.pos_frames = {}
-        self.neg_frames = {}
-        self.vid_cats = {}
-        for vid in self.vids:
-            spill_frames = glob.glob(vid+'/*')
-            not_spill_frames = glob.glob(vid.replace('spill_vids','not_spill_vids')+'/*')
-            self.vid_frames[vid] = spill_frames + not_spill_frames
-            self.vid_cats[vid] = [0] * len(spill_frames) + [1] * len(not_spill_frames)
-            self.pos_frames[vid] = spill_frames
-            self.neg_frames[vid] = not_spill_frames
+        if train:
+            self.vid_frames = {}
+            self.pos_frames = {}
+            self.neg_frames = {}
+            self.vid_cats = {}
+            for vid in self.vids:
+                spill_frames = glob.glob(vid+'/*')
+                not_spill_frames = glob.glob(vid.replace('spill_vids','not_spill_vids')+'/*')
+                self.vid_frames[vid] = spill_frames + not_spill_frames
+                self.vid_cats[vid] = [0] * len(spill_frames) + [1] * len(not_spill_frames)
+                self.pos_frames[vid] = spill_frames
+                self.neg_frames[vid] = not_spill_frames
 
-        self.batch_size = batch_size
-        self.num_crops = {}
+            self.batch_size = batch_size
+            self.num_crops = {}
 
-        self.zeros = torch.zeros(1024)
-        self.ones = torch.ones(1024)
+            self.zeros = torch.zeros(1024)
+            self.ones = torch.ones(1024)
 
-        self.random_flip = torchvision.transforms.RandomHorizontalFlip(p=0.5)
+            self.random_flip = torchvision.transforms.RandomHorizontalFlip(p=0.5)
 
-        self.num_spill_samples = 30
+            self.num_spill_samples = 30
 
-        self.videos = glob.glob(directory+'/spill_vids/*.mp4') + glob.glob(directory+'/spill_vids/*.avi')
+            self.videos = glob.glob(directory+'/spill_vids/*.mp4') + glob.glob(directory+'/spill_vids/*.avi')
 
-        self.vid_resize_range = {480: (1,2), 608: (0.6,1.5), 720: (0.5,1.5), 1080: (0.6,1.5)}
+            self.vid_resize_range = {480: (1,2), 608: (0.6,1.5), 720: (0.5,1.5), 1080: (0.6,1.5)}
 
-        self.video_groups = ['gallon','smacking_drinks','react','store1_1','store1_2','store1_3']
-        self.vid_probs = [0.6,0.7,0.9,0.93,0.96,1.]
-        self.vid_pos = {}
-        self.vid_neg = {}
-        for gr in self.video_groups:
-            self.vid_pos[gr] = glob.glob(directory+'/spill_vids/{}*'.format(gr))
-            self.vid_neg[gr] = glob.glob(directory+'/not_spill_vids/{}*'.format(gr))
+            self.video_groups = ['gallon','smacking_drinks','react','store1_1','store1_2','store1_3']
+            self.vid_probs = [0.6,0.7,0.9,0.93,0.96,1.]
+            self.vid_pos = {}
+            self.vid_neg = {}
+            for gr in self.video_groups:
+                self.vid_pos[gr] = glob.glob(directory+'/spill_vids/{}*'.format(gr))
+                self.vid_neg[gr] = glob.glob(directory+'/not_spill_vids/{}*'.format(gr))
         
         self.train = train
         if self.train:
@@ -157,7 +159,7 @@ class CustomDataGen(torch.utils.data.Dataset):
             #self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
             #self.num_vals = [60,30,15,30,15,20]
             self.batch_size = 1
-            self.n = 30
+            self.n = 10
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
@@ -319,8 +321,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                             all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
                 else:        
                     if dataset == 'pool':
-                        for cr_dim in [(2,1),(3,1)]:
-                            num_y,num_x = cr_dim
+                        for crop_dim in [(2,1),(3,1)]:
+                            num_y,num_x = crop_dim
                             p_w,p_h = img_w//num_x, img_h//num_y
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
@@ -333,7 +335,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                             spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
                             for crop_dim in [(2,3),(3,5),(4,7)]:
                                 max_iou = 0.
-                                num_y,num_x = cr_dim
+                                num_y,num_x = crop_dim
                                 p_w,p_h = img_w//num_x, img_h//num_y
                                 for y_ix in range(num_y):
                                     for x_ix in range(num_x):
@@ -354,7 +356,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 all_patches.append(self.preprocess(spill_patch))
                         else:
                             for crop_dim in [(2,3),(3,5),(4,7)]:
-                                num_y,num_x = cr_dim
+                                num_y,num_x = crop_dim
                                 p_w,p_h = img_w//num_x, img_h//num_y
                                 for y_ix in range(num_y):
                                     for x_ix in range(num_x):
@@ -457,7 +459,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                     frames.append(Image.open(fr_sample))
                     bboxes.append(bbox)
 
-            frames.extend(random.sample(self.val_no_spills,FLAGS.val_batch))
+            no_spill_frames = random.sample(self.val_no_spills,FLAGS.val_batch)
+            for ns_frame in no_spill_frames:
+                frames.append(Image.open(ns_frame))
 
             imgs = self.__get_image__(index, dataset='val_video', sampled_frames=(frames,bboxes))
             pos_images = imgs[:len(bboxes)]

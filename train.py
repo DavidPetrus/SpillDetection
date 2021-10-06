@@ -32,7 +32,7 @@ flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
-flags.DEFINE_string('scale','all','')
+flags.DEFINE_string('scale','xlarge','')
 
 # Color Augmentations
 flags.DEFINE_bool('hue_pos',True,'')
@@ -70,7 +70,7 @@ def main(argv):
     training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
     validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False, color_distorts=color_distorts)
-    validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
+    validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=2, pin_memory=True)
 
     spill_det = SpillDetector(clip_model)
     spill_det.to('cuda')
@@ -192,11 +192,11 @@ def main(argv):
         acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
         for data in validation_generator:
             with torch.no_grad():
-                img_patches,_ = data
+                img_patches = data
 
                 sims = spill_det(img_patches.to('cuda'))
-                pos_sims = sims[:(10+3+5)*3].reshape(10+3+5,3,FLAGS.num_prototypes).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*3:].reshape(FLAGS.val_batch,8+23+46,FLAGS.num_prototypes).max(dim=2)[0]
+                pos_sims = sims[:(10+3+5)*3*num_distorts].reshape(10+3+5,3,FLAGS.num_prototypes*num_distorts).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*3*num_distorts:].reshape(FLAGS.val_batch,8+23+46,FLAGS.num_prototypes*num_distorts).max(dim=2)[0]
 
                 sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
                 sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
@@ -235,6 +235,8 @@ def main(argv):
         log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
 
         wandb.log(log_dict)
+
+        val_accs = [acc_clear_2x3,acc_clear_3x5,acc_dark_2x3,acc_dark_3x5]
 
         if sum(val_accs) > min_acc:
             torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
