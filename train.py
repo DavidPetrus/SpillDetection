@@ -181,21 +181,20 @@ def main(argv):
                 img_patches,_ = data
 
                 sims = spill_det(img_patches.to('cuda'))
-                if val_count == 0:
-                    pos_sims = sims[:300].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
-                    neg_sims = sims[300:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
-                elif val_count < 5:
-                    pos_sims = sims[:600].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
-                    neg_sims = sims[600:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
-                else:
-                    pos_sims = sims[:200].reshape(num_vals[val_count],val_patches[val_count],FLAGS.num_prototypes)
-                    neg_sims = sims[200:].max(dim=1)[0].reshape(1,-1).tile(num_vals[val_count],1)
+                pos_sims = sims[:(10+3+5)*3].reshape(10+3+5,3,FLAGS.num_prototypes).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*3:].reshape(10,8+23+46,FLAGS.num_prototypes).max(dim=2)[0]
 
-                p_sim = pos_sims.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
-                logits = torch.cat([p_sim[:,:,0],neg_sims],dim=1)/FLAGS.temperature
+                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,10*8).tile(10+3+5,1)],dim=1)
+                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,10*23).tile(10+3+5,1)],dim=1)
+                sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,10*46).tile(10+3+5,1)],dim=1)
 
-                val_loss = F.cross_entropy(logits,lab[:num_vals[val_count]])
-                val_acc = (torch.argmax(logits,dim=1)==0).float().mean()
+                loss_2x3 = F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
+                loss_3x5 = F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
+                loss_4x7 = F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+
+                acc_2x3 = (torch.argmax(sims_2x3,dim=1)==0).float().mean()
+                acc_3x5 = (torch.argmax(sims_3x5,dim=1)==0).float().mean()
+                acc_4x7 = (torch.argmax(sims_4x7,dim=1)==0).float().mean()
 
                 val_losses.append(val_loss)
                 val_accs.append(val_acc)

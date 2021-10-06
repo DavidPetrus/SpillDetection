@@ -20,21 +20,45 @@ class CustomDataGen(torch.utils.data.Dataset):
     
     def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True):
         
-        self.spill_images = glob.glob(directory+'/spills/*')
-        self.not_spill_images = glob.glob(directory+'/not_spills/*')
-        self.all_images = self.spill_images + self.not_spill_images
-        self.img_cats = [0] * len(self.spill_images) + [1] * len(self.not_spill_images)
-        #self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
+        if train:
+            self.spill_images = glob.glob(directory+'/spills/*')
+            self.not_spill_images = glob.glob(directory+'/not_spills/*')
+            self.all_images = self.spill_images + self.not_spill_images
+            self.img_cats = [0] * len(self.spill_images) + [1] * len(self.not_spill_images)
+            #self.all_images, self.img_cats = shuffle(self.all_images, self.img_cats)
 
-        self.puddle_images = glob.glob(directory+'/puddles/*')
-        self.not_puddle_images = glob.glob(directory+'/not_puddles/*')
-        self.all_puddles = self.puddle_images + self.not_puddle_images
-        self.puddle_cats = [0] * len(self.puddle_images) + [1] * len(self.not_puddle_images)
-        #self.all_puddles, self.puddle_cats = shuffle(self.all_puddles, self.puddle_cats)
+            self.puddle_images = glob.glob(directory+'/puddles/*')
+            self.not_puddle_images = glob.glob(directory+'/not_puddles/*')
+            self.all_puddles = self.puddle_images + self.not_puddle_images
+            self.puddle_cats = [0] * len(self.puddle_images) + [1] * len(self.not_puddle_images)
+            #self.all_puddles, self.puddle_cats = shuffle(self.all_puddles, self.puddle_cats)
 
-        self.vids = glob.glob(directory+'/spill_vids/*')
-        self.gallon = [vid for vid in self.vids if 'gallon' in vid]
-        self.rds = [vid for vid in self.vids if not 'gallon' in vid]
+            self.vids = glob.glob(directory+'/spill_vids/*')
+            self.gallon = [vid for vid in self.vids if 'gallon' in vid]
+            self.rds = [vid for vid in self.vids if not 'gallon' in vid]
+        else:
+            self.val_no_spills = glob.glob(directory+"/no_spills/*/*")
+
+            self.val_frames = {}
+            for t in ['clear','dark','opaque']:
+                self.val_frames[t] = {}
+
+                vids = glob.glob(directory+"/{}_spills/*.txt".format(t))
+
+                for v in vids:
+                    self.val_frames[t][v[:-4]] = []
+                    imgs = glob.glob(v[:-4]+"/*")
+
+                    with open(v,'r') as fp:
+                        lines = fp.read().splitlines()
+
+                    no_spill_frames = []
+                    spill_frames = {}
+                    for line in lines:
+                        if 'spill' in line:
+                            fr,lab,lux,luy,rbx,rby = line.split(' ')
+                            if "/"+fr[2:]+".png" in imgs:
+                                self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -128,16 +152,18 @@ class CustomDataGen(torch.utils.data.Dataset):
         if self.train:
             self.n = len(self.spill_images)
         else:
-            self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
-            self.num_vals = [60,30,15,30,15,20]
+            #self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
+            #self.num_vals = [60,30,15,30,15,20]
             self.batch_size = 1
-            self.n = len(self.val_samples)
+            self.n = 30
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
         if dataset == 'video':
             vids,frames,bboxes,cats,all_bboxes = sampled_frames
             all_images = frames
+        elif dataset == 'val_video':
+            all_images,bboxes = sampled_frames
         elif dataset == 'spill':
             pos_img = Image.open(self.spill_images[np.random.randint(len(self.spill_images))])
             neg_img = Image.open(self.not_spill_images[np.random.randint(len(self.not_spill_images))])
@@ -287,23 +313,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                 crops = torch.stack(all_patches)
                 #crops = self.color_aug(crops)
             else:        
-                if dataset == 'spill':
-                    crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
-                    num_patches = self.num_patches['spill'] if cat == 0 else self.num_patches['not_spill']
-                    all_patches = []
-                    for num_p,cr_dim in zip(num_patches,crop_dims):
-                        min_dim,max_dim = cr_dim
-                        num_x = min_dim if img_h > img_w else max_dim
-                        num_y = max_dim if img_h > img_w else min_dim
-                        p_w,p_h = img_w//num_x, img_h//num_y
-                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
-                        p_count = 0
-                        for x_ix in range(num_x):
-                            for y_ix in range(num_y):
-                                if p_count in patch_samples:
-                                    all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                                p_count += 1
-                elif dataset == 'pool':
+                if dataset == 'pool':
                     all_patches = []
                     for cr_dim in [(2,1),(3,1)]:
                         num_y,num_x = cr_dim
@@ -311,28 +321,45 @@ class CustomDataGen(torch.utils.data.Dataset):
                         for y_ix in range(num_y):
                             for x_ix in range(num_x):
                                 all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                elif 'large' in dataset:
+                else:
                     all_patches = []
-                    for cr_dim in [(2,3),(3,5)]:
-                        num_y,num_x = cr_dim
-                        offset = 1 if num_y==2 else 0
-                        p_w,p_h = img_w//num_x, img_h//num_y
-                        for y_ix in range(num_y):
-                            for x_ix in range(num_x):
-                                if y_ix < offset and x_ix < offset:
-                                    continue
-                                all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
-                elif 'small' in dataset:
-                    all_patches = []
-                    for cr_dim in [(4,7),(5,8)]:
-                        num_y,num_x = cr_dim
-                        offset = (3,2) if num_y==5 else (0,0)
-                        p_w,p_h = img_w//num_x, img_h//num_y
-                        for y_ix in range(num_y-1):
-                            for x_ix in range(num_x-1):
-                                if y_ix<offset[0] and x_ix<offset[1]:
-                                    continue
-                                all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*x_ix+p_w,p_h//2+p_h*y_ix+p_h))))
+                    has_spill = True if i_ix < len(bboxes) else False
+
+                    if has_spill:
+                        bb = bboxes[i_ix]
+                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
+                        for crop_dim in [(2,3),(3,5),(4,7)]:
+                            max_iou = 0.
+                            num_y,num_x = cr_dim
+                            p_w,p_h = img_w//num_x, img_h//num_y
+                            for y_ix in range(num_y):
+                                for x_ix in range(num_x):
+                                    patch_bbox = (p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))
+                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                    if iou > max_iou:
+                                        max_iou = iou
+                                        spill_patch = img.crop(patch_bbox)
+
+                            for y_ix in range(num_y-1):
+                                for x_ix in range(num_x-1):
+                                    patch_bbox = (p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))
+                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                    if iou > max_iou:
+                                        max_iou = iou
+                                        spill_patch = img.crop(patch_bbox)
+                            
+                            all_patches.append(self.preprocess(spill_patch))
+                    else:
+                        for crop_dim in [(2,3),(3,5),(4,7)]:
+                            num_y,num_x = cr_dim
+                            p_w,p_h = img_w//num_x, img_h//num_y
+                            for y_ix in range(num_y):
+                                for x_ix in range(num_x):
+                                    all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+
+                            for y_ix in range(num_y-1):
+                                for x_ix in range(num_x-1):
+                                    all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1)))))
 
                 crops = torch.stack(all_patches)
 
@@ -415,18 +442,33 @@ class CustomDataGen(torch.utils.data.Dataset):
                 imgs = self.__get_image__(index+ix, dataset='puddle')
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
+
+            X = torch.cat(pos_images+neg_images)
+            lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
+
+            return X,lab
         else:
-            pos_images = []
-            neg_images = []
-            for ix in range(self.num_vals[index]):
-                imgs = self.__get_image__(index, dataset=self.val_samples[index])
-                pos_images.append(imgs[0])
-                neg_images.append(imgs[1])
+            frames = []
+            bboxes = []
+            for t in ['clear','dark','opaque']:
+                for v,img_names in self.val_frames[t].items():
+                    fr_sample,bbox = random.sample(img_names,1)[0]
+                    frames.append(Image.open(fr_sample))
+                    bboxes.append(bbox)
 
-        X = torch.cat(pos_images+neg_images)
-        lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
+            frames.extend(random.sample(self.val_no_spills,10))
 
-        return X,lab
+            imgs = self.__get_image__(index, dataset='val_video', sampled_frames=(frames,bboxes))
+            pos_images = imgs[:len(bboxes)]
+            neg_images = imgs[len(bboxes):]
+
+            #for ix in range(30):
+            #    imgs = self.__get_image__(index, dataset='pool')
+            #    pos_images.append(imgs[0])
+            #    neg_images.append(imgs[1])
+
+            return torch.cat(pos_images+neg_images)
+        
     
     def __len__(self):
         return self.n // self.batch_size
