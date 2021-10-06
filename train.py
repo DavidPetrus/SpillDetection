@@ -3,6 +3,7 @@ import cv2
 import torch
 import torch.nn.functional as F
 import torchvision
+import torchvision.transforms.functional as F_vis
 import glob
 import datetime
 import random
@@ -21,6 +22,7 @@ flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
 flags.DEFINE_integer('epochs',100,'')
+flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
@@ -31,6 +33,14 @@ flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
 flags.DEFINE_string('scale','all','')
+
+# Color Augmentations
+flags.DEFINE_bool('hue_pos',True,'')
+flags.DEFINE_bool('hue_neg',True,'')
+flags.DEFINE_bool('hue_full',False,'')
+flags.DEFINE_bool('gamma_dark',False,'')
+flags.DEFINE_bool('gamma_light',False,'')
+flags.DEFINE_bool('invert',False,'')
 
 def main(argv):
 
@@ -51,9 +61,15 @@ def main(argv):
 
     clip_model, preprocess = clip.load(FLAGS.clip_model,device='cuda')
 
-    training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True)
+    color_distorts = [None]
+    if FLAGS.hue_pos:
+        color_distorts.append(lambda x: F_vis.adjust_hue(x,0.25))
+    if FLAGS.hue_neg:
+        color_distorts.append(lambda x: F_vis.adjust_hue(x,-0.25))
+
+    training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
-    validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False)
+    validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False, color_distorts=color_distorts)
     validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
 
     spill_det = SpillDetector(clip_model)
@@ -65,30 +81,28 @@ def main(argv):
 
     color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.15)
 
-    val_data = ['pool','large_water','small_water','large_other','small_other','spill']
-    num_vals = [60,30,15,30,15,20]
-    val_patches = [5,20,40,20,40,10]
+    num_distorts = len(color_distorts)
 
     if FLAGS.scale == 'all':
-        num_vid_patches = 30
-        num_spill_patches = 10
-        num_puddle_patches = 10
+        num_vid_patches = 30*num_distorts
+        num_spill_patches = 10*num_distorts
+        num_puddle_patches = 10*num_distorts
     elif FLAGS.scale == 'small':
-        num_vid_patches = 30
-        num_spill_patches = 10
-        num_puddle_patches = 10
+        num_vid_patches = 30*num_distorts
+        num_spill_patches = 10*num_distorts
+        num_puddle_patches = 10*num_distorts
     elif FLAGS.scale == 'large':
-        num_vid_patches = 8
-        num_spill_patches = 1
-        num_puddle_patches = 3
+        num_vid_patches = 8*num_distorts
+        num_spill_patches = 1*num_distorts
+        num_puddle_patches = 3*num_distorts
     elif FLAGS.scale == 'xlarge':
-        num_vid_patches = 2
-        num_spill_patches = 1
-        num_puddle_patches = 1
+        num_vid_patches = 2*num_distorts
+        num_spill_patches = 1*num_distorts
+        num_puddle_patches = 1*num_distorts
     elif FLAGS.scale == 'med':
-        num_vid_patches = 3
-        num_spill_patches = 2
-        num_puddle_patches = 2
+        num_vid_patches = 3*num_distorts
+        num_spill_patches = 2*num_distorts
+        num_puddle_patches = 2*num_distorts
 
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
     vid_mask = torch.zeros(4,num_vid_patches,FLAGS.num_prototypes).to('cuda')
@@ -173,37 +187,52 @@ def main(argv):
                 for g in optimizer.param_groups:
                     g['lr'] = 0.001
 
-        val_accs = []
-        val_losses = []
         val_count = 0
+        loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = \
+        acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
         for data in validation_generator:
             with torch.no_grad():
                 img_patches,_ = data
 
                 sims = spill_det(img_patches.to('cuda'))
                 pos_sims = sims[:(10+3+5)*3].reshape(10+3+5,3,FLAGS.num_prototypes).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*3:].reshape(10,8+23+46,FLAGS.num_prototypes).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*3:].reshape(FLAGS.val_batch,8+23+46,FLAGS.num_prototypes).max(dim=2)[0]
 
-                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,10*8).tile(10+3+5,1)],dim=1)
-                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,10*23).tile(10+3+5,1)],dim=1)
-                sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,10*46).tile(10+3+5,1)],dim=1)
+                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
+                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
+                sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
 
-                loss_2x3 = F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
-                loss_3x5 = F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
-                loss_4x7 = F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+                loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
+                loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
+                loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
-                acc_2x3 = (torch.argmax(sims_2x3,dim=1)==0).float().mean()
-                acc_3x5 = (torch.argmax(sims_3x5,dim=1)==0).float().mean()
-                acc_4x7 = (torch.argmax(sims_4x7,dim=1)==0).float().mean()
+                acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
+                acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
+                acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
-                val_losses.append(val_loss)
-                val_accs.append(val_acc)
+                acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
+                acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
+                acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
+
+                acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+5],dim=1)==0).float().mean()
+                acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+5],dim=1)==0).float().mean()
+                acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
+
                 val_count += 1
 
-        log_dict = {"Epoch":epoch,"Val Loss": sum(val_losses)/len(val_losses), "Val Acc": sum(val_accs)/len(val_accs)}
-        for v_ix in range(len(val_accs)):
-            log_dict["Val loss "+val_data[v_ix]] = val_losses[v_ix]
-            log_dict["Val acc "+val_data[v_ix]] = val_accs[v_ix]
+        log_dict = {"Epoch":epoch}
+        log_dict["Val_loss_2x3"] = loss_2x3/val_count
+        log_dict["Val_loss_3x5"] = loss_3x5/val_count
+        log_dict["Val_loss_4x7"] = loss_4x7/val_count
+        log_dict["Val_acc_clear_2x3"] = acc_clear_2x3/val_count
+        log_dict["Val_acc_clear_3x5"] = acc_clear_3x5/val_count
+        log_dict["Val_acc_clear_4x7"] = acc_clear_4x7/val_count
+        log_dict["Val_acc_dark_2x3"] = acc_dark_2x3/val_count
+        log_dict["Val_acc_dark_3x5"] = acc_dark_3x5/val_count
+        log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
+        log_dict["Val_acc_opaque_2x3"] = acc_opaque_2x3/val_count
+        log_dict["Val_acc_opaque_3x5"] = acc_opaque_3x5/val_count
+        log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
 
         wandb.log(log_dict)
 

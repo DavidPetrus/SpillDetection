@@ -18,7 +18,7 @@ FLAGS = flags.FLAGS
 
 class CustomDataGen(torch.utils.data.Dataset):
     
-    def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True):
+    def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True,color_distorts=None):
         
         if train:
             self.spill_images = glob.glob(directory+'/spills/*')
@@ -59,6 +59,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                             fr,lab,lux,luy,rbx,rby = line.split(' ')
                             if "/"+fr[2:]+".png" in imgs:
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
+
+        self.color_distorts = color_distorts
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -187,183 +189,182 @@ class CustomDataGen(torch.utils.data.Dataset):
             all_images = [pos_img,neg_img]
 
         imgs = []
-        for i_ix,img in enumerate(all_images):
+        for i_ix,img_load in enumerate(all_images):
             cat = 0 if i_ix==0 else 1
 
-            img_w,img_h = img.size
+            img_w,img_h = img_load.size
 
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
 
-            if self.train:
-                if dataset == 'spill':
-                    cr_h,cr_w = np.random.randint(int(0.7*img_h),img_h+1),np.random.randint(int(0.7*img_w),img_w+1)
-                    cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
-                    crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+            all_patches = []
 
-                    crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
-                    num_patches = self.num_patches['spill'] if cat == 0 else self.num_patches['not_spill']
-                    all_patches = []
-                    for num_p,cr_dim in zip(num_patches,crop_dims):
-                        min_dim,max_dim = cr_dim
-                        num_x = min_dim if cr_h > cr_w else max_dim
-                        num_y = max_dim if cr_h > cr_w else min_dim
-                        p_w,p_h = cr_w//num_x, cr_h//num_y
-                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
-                        p_count = 0
-                        for x_ix in range(num_x):
-                            for y_ix in range(num_y):
-                                if p_count in patch_samples:
-                                    all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
-                                p_count += 1
-                elif dataset == 'puddle':
-                    cr_h,cr_w = np.random.randint(int(0.85*img_h),img_h+1),np.random.randint(int(0.85*img_w),img_w+1)
-                    cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
-                    crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+            for c in self.color_distorts:
 
-                    crop_dims = self.crop_dims['puddle'] if cat == 0 else self.crop_dims['not_puddle']
-                    num_patches = self.num_patches['puddle'] if cat == 0 else self.num_patches['not_puddle']
-                    all_patches = []
-                    for num_p,cr_dim in zip(num_patches,crop_dims):
-                        num_y,num_x = cr_dim
-                        p_w,p_h = cr_w//num_x, cr_h//num_y
-                        for x_ix in range(num_x):
-                            for y_ix in range(num_y):
-                                all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
-
-                elif dataset == 'video':
-                    frame_bboxes = all_bboxes[i_ix]
-                    for bb in frame_bboxes:
-                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-
-                    cat = cats[i_ix]
-                    bbox = bboxes[i_ix]
-                    lux,luy,rbx,rby = bbox
-                    bb_w = rbx-lux
-                    bb_h = rby-luy
-                    cr_l = np.random.randint(0,lux+1)
-                    cr_t = np.random.randint(0,luy+1)
-                    cr_r = np.random.randint(rbx,img_w)
-                    cr_b = np.random.randint(rby,img_h)
-                    
-                    crop_size = min(cr_r-cr_l,cr_b-cr_t)
-                    if crop_size < bb_w:
-                        crop_size = cr_r-cr_l
-                        if luy > img_h-1-rby:
-                            cr_t = max(cr_b-crop_size,0)
-                        else:
-                            cr_b = min(cr_t+crop_size,img_h-1)
-                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
-                    elif crop_size < bb_h:
-                        crop_size = cr_b-cr_t
-                        if lux > img_w-1-rbx:
-                            cr_l = max(cr_r-crop_size,0)
-                        else:
-                            cr_r = min(cr_l+crop_size,img_w-1)
-                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
-
-                    if cr_r-cr_l > crop_size:
-                        if lux < img_w-1-rbx:
-                            cr_l = np.random.randint(max(0,rbx-crop_size),min(lux+1,img_w-crop_size))
-                            cr_r = cr_l+crop_size
-                        else:
-                            cr_r = np.random.randint(max(rbx,crop_size),min(img_w,lux+crop_size+1))
-                            cr_l = cr_r-crop_size
-                    elif cr_b-cr_t > crop_size:
-                        if luy < img_h-1-rby:
-                            cr_t = np.random.randint(max(0,rby-crop_size),min(luy+1,img_h-crop_size))
-                            cr_b = cr_t+crop_size
-                        else:
-                            cr_b = np.random.randint(max(rby,crop_size),min(img_h,luy+crop_size+1))
-                            cr_t = cr_b-crop_size
-
-                    crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
-                    spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
-
-                    crop = img.crop((cr_l,cr_t,cr_r,cr_b))
-                    cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
-
-                    vid_group = vids[0] if i_ix<4 else vids[1]
-                    crop_dims = self.crop_dims[vid_group]
-                    num_patches = self.num_patches[vid_group]
-                    all_patches = []
-                    for num_p,cr_dim in zip(num_patches,crop_dims):
-                        min_dim,max_dim = cr_dim
-                        num_x = min_dim if cr_h > cr_w else max_dim
-                        num_y = max_dim if cr_h > cr_w else min_dim
-                        p_w,p_h = cr_w//num_x, cr_h//num_y
-                        patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
-                        spill_patches = []
-                        sampled_patches = []
-                        p_count = 0
-                        for y_ix in range(num_y):
-                            for x_ix in range(num_x):
-                                if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
-                                    spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
-                                elif p_count in patch_samples:
-                                    sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
-
-                                p_count += 1
-                                if len(spill_patches) == num_p:
-                                    break
-                            if len(spill_patches) == num_p:
-                                break
-
-                        all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
-
-                crops = torch.stack(all_patches)
-                #crops = self.color_aug(crops)
-            else:        
-                if dataset == 'pool':
-                    all_patches = []
-                    for cr_dim in [(2,1),(3,1)]:
-                        num_y,num_x = cr_dim
-                        p_w,p_h = img_w//num_x, img_h//num_y
-                        for y_ix in range(num_y):
-                            for x_ix in range(num_x):
-                                all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                if c is None:
+                    img = img_load
                 else:
-                    all_patches = []
-                    has_spill = True if i_ix < len(bboxes) else False
+                    img = c(img_load)
 
-                    if has_spill:
-                        bb = bboxes[i_ix]
-                        spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-                        for crop_dim in [(2,3),(3,5),(4,7)]:
-                            max_iou = 0.
+                if self.train:
+                    if dataset == 'spill':
+                        cr_h,cr_w = np.random.randint(int(0.7*img_h),img_h+1),np.random.randint(int(0.7*img_w),img_w+1)
+                        cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
+                        crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+
+                        crop_dims = self.crop_dims['spill'] if cat == 0 else self.crop_dims['not_spill']
+                        num_patches = self.num_patches['spill'] if cat == 0 else self.num_patches['not_spill']
+                        for num_p,cr_dim in zip(num_patches,crop_dims):
+                            min_dim,max_dim = cr_dim
+                            num_x = min_dim if cr_h > cr_w else max_dim
+                            num_y = max_dim if cr_h > cr_w else min_dim
+                            p_w,p_h = cr_w//num_x, cr_h//num_y
+                            patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                            p_count = 0
+                            for x_ix in range(num_x):
+                                for y_ix in range(num_y):
+                                    if p_count in patch_samples:
+                                        all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                    p_count += 1
+                    elif dataset == 'puddle':
+                        cr_h,cr_w = np.random.randint(int(0.85*img_h),img_h+1),np.random.randint(int(0.85*img_w),img_w+1)
+                        cr_y,cr_x = np.random.randint(0,img_h-cr_h+1), np.random.randint(0,img_w-cr_w+1)
+                        crop = img.crop((cr_x,cr_y,cr_x+cr_w,cr_y+cr_h))
+
+                        crop_dims = self.crop_dims['puddle'] if cat == 0 else self.crop_dims['not_puddle']
+                        num_patches = self.num_patches['puddle'] if cat == 0 else self.num_patches['not_puddle']
+                        for num_p,cr_dim in zip(num_patches,crop_dims):
                             num_y,num_x = cr_dim
-                            p_w,p_h = img_w//num_x, img_h//num_y
+                            p_w,p_h = cr_w//num_x, cr_h//num_y
+                            for x_ix in range(num_x):
+                                for y_ix in range(num_y):
+                                    all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+
+                    elif dataset == 'video':
+                        frame_bboxes = all_bboxes[i_ix]
+                        for bb in frame_bboxes:
+                            spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
+
+                        cat = cats[i_ix]
+                        bbox = bboxes[i_ix]
+                        lux,luy,rbx,rby = bbox
+                        bb_w = rbx-lux
+                        bb_h = rby-luy
+                        cr_l = np.random.randint(0,lux+1)
+                        cr_t = np.random.randint(0,luy+1)
+                        cr_r = np.random.randint(rbx,img_w)
+                        cr_b = np.random.randint(rby,img_h)
+                        
+                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
+                        if crop_size < bb_w:
+                            crop_size = cr_r-cr_l
+                            if luy > img_h-1-rby:
+                                cr_t = max(cr_b-crop_size,0)
+                            else:
+                                cr_b = min(cr_t+crop_size,img_h-1)
+                            crop_size = min(cr_r-cr_l,cr_b-cr_t)
+                        elif crop_size < bb_h:
+                            crop_size = cr_b-cr_t
+                            if lux > img_w-1-rbx:
+                                cr_l = max(cr_r-crop_size,0)
+                            else:
+                                cr_r = min(cr_l+crop_size,img_w-1)
+                            crop_size = min(cr_r-cr_l,cr_b-cr_t)
+
+                        if cr_r-cr_l > crop_size:
+                            if lux < img_w-1-rbx:
+                                cr_l = np.random.randint(max(0,rbx-crop_size),min(lux+1,img_w-crop_size))
+                                cr_r = cr_l+crop_size
+                            else:
+                                cr_r = np.random.randint(max(rbx,crop_size),min(img_w,lux+crop_size+1))
+                                cr_l = cr_r-crop_size
+                        elif cr_b-cr_t > crop_size:
+                            if luy < img_h-1-rby:
+                                cr_t = np.random.randint(max(0,rby-crop_size),min(luy+1,img_h-crop_size))
+                                cr_b = cr_t+crop_size
+                            else:
+                                cr_b = np.random.randint(max(rby,crop_size),min(img_h,luy+crop_size+1))
+                                cr_t = cr_b-crop_size
+
+                        crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
+                        spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
+
+                        crop = img.crop((cr_l,cr_t,cr_r,cr_b))
+                        cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
+
+                        vid_group = vids[0] if i_ix<4 else vids[1]
+                        crop_dims = self.crop_dims[vid_group]
+                        num_patches = self.num_patches[vid_group]
+                        for num_p,cr_dim in zip(num_patches,crop_dims):
+                            min_dim,max_dim = cr_dim
+                            num_x = min_dim if cr_h > cr_w else max_dim
+                            num_y = max_dim if cr_h > cr_w else min_dim
+                            p_w,p_h = cr_w//num_x, cr_h//num_y
+                            patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
+                            spill_patches = []
+                            sampled_patches = []
+                            p_count = 0
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
-                                    patch_bbox = (p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))
-                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
-                                    if iou > max_iou:
-                                        max_iou = iou
-                                        spill_patch = img.crop(patch_bbox)
+                                    if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
+                                        spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                    elif p_count in patch_samples:
+                                        sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
-                            for y_ix in range(num_y-1):
-                                for x_ix in range(num_x-1):
-                                    patch_bbox = (p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))
-                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
-                                    if iou > max_iou:
-                                        max_iou = iou
-                                        spill_patch = img.crop(patch_bbox)
-                            
-                            all_patches.append(self.preprocess(spill_patch))
-                    else:
-                        for crop_dim in [(2,3),(3,5),(4,7)]:
+                                    p_count += 1
+                                    if len(spill_patches) == num_p:
+                                        break
+                                if len(spill_patches) == num_p:
+                                    break
+
+                            all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
+                else:        
+                    if dataset == 'pool':
+                        for cr_dim in [(2,1),(3,1)]:
                             num_y,num_x = cr_dim
                             p_w,p_h = img_w//num_x, img_h//num_y
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
                                     all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                    else:
+                        has_spill = True if i_ix < len(bboxes) else False
 
-                            for y_ix in range(num_y-1):
-                                for x_ix in range(num_x-1):
-                                    all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1)))))
+                        if has_spill:
+                            bb = bboxes[i_ix]
+                            spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
+                            for crop_dim in [(2,3),(3,5),(4,7)]:
+                                max_iou = 0.
+                                num_y,num_x = cr_dim
+                                p_w,p_h = img_w//num_x, img_h//num_y
+                                for y_ix in range(num_y):
+                                    for x_ix in range(num_x):
+                                        patch_bbox = (p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))
+                                        iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                        if iou > max_iou:
+                                            max_iou = iou
+                                            spill_patch = img.crop(patch_bbox)
 
-                crops = torch.stack(all_patches)
+                                for y_ix in range(num_y-1):
+                                    for x_ix in range(num_x-1):
+                                        patch_bbox = (p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))
+                                        iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                        if iou > max_iou:
+                                            max_iou = iou
+                                            spill_patch = img.crop(patch_bbox)
+                                
+                                all_patches.append(self.preprocess(spill_patch))
+                        else:
+                            for crop_dim in [(2,3),(3,5),(4,7)]:
+                                num_y,num_x = cr_dim
+                                p_w,p_h = img_w//num_x, img_h//num_y
+                                for y_ix in range(num_y):
+                                    for x_ix in range(num_x):
+                                        all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
 
-            imgs.append(crops)
+                                for y_ix in range(num_y-1):
+                                    for x_ix in range(num_x-1):
+                                        all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1)))))
+
+            imgs.append(torch.stack(all_patches))
 
         return imgs
 
@@ -456,7 +457,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     frames.append(Image.open(fr_sample))
                     bboxes.append(bbox)
 
-            frames.extend(random.sample(self.val_no_spills,10))
+            frames.extend(random.sample(self.val_no_spills,FLAGS.val_batch))
 
             imgs = self.__get_image__(index, dataset='val_video', sampled_frames=(frames,bboxes))
             pos_images = imgs[:len(bboxes)]
