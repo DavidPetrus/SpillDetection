@@ -32,6 +32,7 @@ flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
+flags.DEFINE_float('vid_coeff',0.5,'')
 flags.DEFINE_string('scale','xlarge','')
 
 # Color Augmentations
@@ -42,6 +43,13 @@ flags.DEFINE_bool('gamma_dark',False,'')
 flags.DEFINE_bool('gamma_light',False,'')
 flags.DEFINE_bool('invert',False,'')
 flags.DEFINE_bool('posterize',False,'')
+
+# Superimpose
+flags.DEFINE_float('min_alpha',140,'')
+flags.DEFINE_float('max_alpha',220,'')
+flags.DEFINE_float('min_spill_frac',0.4,'')
+flags.DEFINE_float('max_spill_frac',1.,'')
+flags.DEFINE_float('superimpose_frac',0.65,'')
 
 def main(argv):
 
@@ -175,7 +183,7 @@ def main(argv):
             spill_loss = F.cross_entropy(logits,lab[:8*FLAGS.top_k_spill])
             spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
-            final_loss = vid_loss + spill_loss + FLAGS.puddle_coeff*puddle_loss
+            final_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
 
             train_iter += 1
             log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
