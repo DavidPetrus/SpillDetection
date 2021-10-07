@@ -21,7 +21,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',100,'')
+flags.DEFINE_integer('epochs',20,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
@@ -35,12 +35,13 @@ flags.DEFINE_float('puddle_coeff',0.3,'')
 flags.DEFINE_string('scale','xlarge','')
 
 # Color Augmentations
-flags.DEFINE_bool('hue_pos',True,'')
-flags.DEFINE_bool('hue_neg',True,'')
+flags.DEFINE_bool('hue_pos',False,'')
+flags.DEFINE_bool('hue_neg',False,'')
 flags.DEFINE_bool('hue_full',False,'')
 flags.DEFINE_bool('gamma_dark',False,'')
 flags.DEFINE_bool('gamma_light',False,'')
 flags.DEFINE_bool('invert',False,'')
+flags.DEFINE_bool('posterize',False,'')
 
 def main(argv):
 
@@ -66,6 +67,17 @@ def main(argv):
         color_distorts.append(lambda x: F_vis.adjust_hue(x,0.25))
     if FLAGS.hue_neg:
         color_distorts.append(lambda x: F_vis.adjust_hue(x,-0.25))
+    if FLAGS.hue_full:
+        color_distorts.append(lambda x: F_vis.adjust_hue(x,0.5))
+    if FLAGS.invert:
+        color_distorts.append(lambda x: F_vis.invert(x))
+    if FLAGS.gamma_light:
+        color_distorts.append(lambda x: F_vis.adjust_gamma(x,0.5))
+    if FLAGS.gamma_dark:
+        color_distorts.append(lambda x: F_vis.adjust_gamma(x,2))
+    if FLAGS.posterize:
+        color_distorts.append(lambda x: F_vis.posterize(x,2))
+        
 
     training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
@@ -79,7 +91,7 @@ def main(argv):
 
     optimizer = torch.optim.Adam(params=[spill_det.prototypes], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.15)
+    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.1)
 
     num_distorts = len(color_distorts)
 
@@ -236,7 +248,7 @@ def main(argv):
 
         wandb.log(log_dict)
 
-        val_accs = [acc_clear_2x3,acc_clear_3x5,acc_dark_2x3,acc_dark_3x5]
+        val_accs = [acc_clear_2x3,acc_clear_3x5,acc_dark_2x3,acc_dark_3x5,acc_opaque_2x3,acc_opaque_3x5]
 
         if sum(val_accs) > min_acc:
             torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))

@@ -154,12 +154,12 @@ class CustomDataGen(torch.utils.data.Dataset):
         
         self.train = train
         if self.train:
-            self.n = len(self.spill_images)
+            self.n = len(self.spill_images)*3
         else:
             #self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
             #self.num_vals = [60,30,15,30,15,20]
             self.batch_size = 1
-            self.n = 10
+            self.n = 20
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
@@ -199,6 +199,9 @@ class CustomDataGen(torch.utils.data.Dataset):
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
 
             all_patches = []
+
+            if img_load.mode != 'RGB':
+                img_load = img_load.convert('RGB')
 
             for c in self.color_distorts:
 
