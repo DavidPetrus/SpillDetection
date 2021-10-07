@@ -21,13 +21,14 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',16,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',20,'')
+flags.DEFINE_integer('epochs',12,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('num_prototypes',30,'')
+flags.DEFINE_integer('num_proto_sets',1,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
@@ -36,17 +37,17 @@ flags.DEFINE_float('vid_coeff',0.5,'')
 flags.DEFINE_string('scale','xlarge','')
 
 # Color Augmentations
-flags.DEFINE_bool('hue_pos',False,'')
-flags.DEFINE_bool('hue_neg',False,'')
+flags.DEFINE_bool('hue_pos',True,'')
+flags.DEFINE_bool('hue_neg',True,'')
 flags.DEFINE_bool('hue_full',False,'')
 flags.DEFINE_bool('gamma_dark',False,'')
 flags.DEFINE_bool('gamma_light',False,'')
-flags.DEFINE_bool('invert',False,'')
+flags.DEFINE_bool('invert',True,'')
 flags.DEFINE_bool('posterize',False,'')
 
 # Superimpose
 flags.DEFINE_float('min_alpha',140,'')
-flags.DEFINE_float('max_alpha',220,'')
+flags.DEFINE_float('max_alpha',180,'')
 flags.DEFINE_float('min_spill_frac',0.4,'')
 flags.DEFINE_float('max_spill_frac',1.,'')
 flags.DEFINE_float('superimpose_frac',0.65,'')
@@ -99,7 +100,7 @@ def main(argv):
 
     optimizer = torch.optim.Adam(params=[spill_det.prototypes], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.1)
+    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.2)
 
     num_distorts = len(color_distorts)
 
@@ -125,8 +126,8 @@ def main(argv):
         num_puddle_patches = 2*num_distorts
 
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
-    vid_mask = torch.zeros(4,num_vid_patches,FLAGS.num_prototypes).to('cuda')
-    spill_mask = torch.zeros(8,num_spill_patches,FLAGS.num_prototypes).to('cuda')
+    vid_mask = torch.zeros(4,num_vid_patches,1).to('cuda')
+    spill_mask = torch.zeros(8,num_spill_patches,1).to('cuda')
 
     min_acc = 0.
     total_loss = 0.
@@ -142,9 +143,9 @@ def main(argv):
             #img_patches = img_patches.to('cuda')
 
             sims = spill_det(img_patches)
-            pos_sims_vids = sims[:4*num_vid_patches].reshape(4,num_vid_patches,FLAGS.num_prototypes)
-            pos_sims_spills = sims[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,FLAGS.num_prototypes)
-            pos_sims_puddles = sims[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,FLAGS.num_prototypes)
+            pos_sims_vids = sims[:4*num_vid_patches].reshape(4,num_vid_patches,1)
+            pos_sims_spills = sims[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,1)
+            pos_sims_puddles = sims[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,1)
             neg_sims = sims[4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
             # Compute vid loss
@@ -215,8 +216,8 @@ def main(argv):
                 img_patches = data
 
                 sims = spill_det(img_patches.to('cuda'))
-                pos_sims = sims[:(10+3+5)*3*num_distorts].reshape(10+3+5,3,FLAGS.num_prototypes*num_distorts).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*3*num_distorts:].reshape(FLAGS.val_batch,8+23+46,FLAGS.num_prototypes*num_distorts).max(dim=2)[0]
+                pos_sims = sims[:(10+3+5)*3*num_distorts].reshape(10+3+5,3,1*num_distorts).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*3*num_distorts:].reshape(FLAGS.val_batch,8+23+46,1*num_distorts).max(dim=2)[0]
 
                 sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
                 sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
@@ -256,7 +257,7 @@ def main(argv):
 
         wandb.log(log_dict)
 
-        val_accs = [acc_clear_2x3,acc_clear_3x5,acc_dark_2x3,acc_dark_3x5,acc_opaque_2x3,acc_opaque_3x5]
+        val_accs = [acc_clear_2x3,acc_dark_2x3,acc_opaque_2x3]
 
         if sum(val_accs) > min_acc:
             torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))

@@ -198,13 +198,15 @@ class CustomDataGen(torch.utils.data.Dataset):
 
             img_w,img_h = img_load.size
 
-            floor = random.choice(self.floors)
-            cr_size = np.random.randint(int(0.7*min(floor.size[0],floor.size[1])),min(floor.size[0],floor.size[1])+1)
-            cr_y,cr_x = np.random.randint(0,floor.size[1]-cr_size+1), np.random.randint(0,floor.size[0]-cr_size+1)
-            floor = floor.crop((cr_x,cr_y,cr_x+cr_size,cr_y+cr_size))
+            if self.train:
+                floor = random.choice(self.floors)
+                cr_size = np.random.randint(int(0.7*min(floor.size[0],floor.size[1])),min(floor.size[0],floor.size[1])+1)
+                cr_x,cr_y = np.random.randint(0,floor.size[0]-cr_size+1), np.random.randint(0,floor.size[1]-cr_size+1)
+                floor_org = floor.crop((cr_x,cr_y,cr_x+cr_size,cr_y+cr_size))
+                if floor_org.mode != 'RGB':
+                    floor_org = floor_org.convert('RGB')
 
             spill_mask = np.zeros([img_h,img_w,1],dtype=np.float32)
-
             all_patches = []
 
             if img_load.mode != 'RGB':
@@ -214,8 +216,10 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                 if c is None:
                     img = img_load
+                    if self.train: floor = floor_org
                 else:
                     img = c(img_load)
+                    if self.train: floor = c(floor_org)
 
                 if self.train:
                     if dataset == 'spill':
@@ -240,12 +244,13 @@ class CustomDataGen(torch.utils.data.Dataset):
                                             p_floor = floor.copy()
 
                                             resize_frac = np.random.random()*(FLAGS.max_spill_frac-FLAGS.min_spill_frac) + FLAGS.min_spill_frac
-                                            patch = patch.resize((int(resize_frac*floor.size[0]*p_w/p_h),int(resize_frac*floor.size[0])))
+                                            if p_w > p_h:
+                                                patch = patch.resize((int(resize_frac*floor.size[0]),int(resize_frac*floor.size[0]*p_h/p_w)))
+                                            else:
+                                                patch = patch.resize((int(resize_frac*floor.size[0]*p_w/p_h),int(resize_frac*floor.size[0])))
 
                                             patch.putalpha(np.random.randint(FLAGS.min_alpha,FLAGS.max_alpha))
-                                            p_floor.paste(patch, (np.random.randint(floor.size[0]-patch.size[0]), np.random.randint(floor.size[1]-patch.size[1])), patch)
-
-                                            p_floor.show()
+                                            p_floor.paste(patch, (np.random.randint(floor.size[0]-patch.size[0]), np.random.randint(floor.size[1]-patch.size[1]+1)), patch)
                                             all_patches.append(self.random_flip(self.preprocess(p_floor)))
                                         else:
                                             all_patches.append(self.random_flip(self.preprocess(patch)))
@@ -455,7 +460,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     frames.append(frame)
                     bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
         
-            floors_sample = random.sample(self.all_floors,2)
+            floors_sample = random.sample(self.all_floors,3)
             self.floors = [Image.open(floor) for floor in floors_sample]
 
             imgs = self.__get_image__(index, dataset='video', sampled_frames=(vids,frames,bboxes,cats,all_bboxes))
