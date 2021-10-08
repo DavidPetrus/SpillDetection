@@ -4,6 +4,7 @@ import cv2
 import torch
 import torchvision
 import torch.nn.functional as F
+import torchvision.transforms.functional as F_vis
 import glob
 from collections import defaultdict
 
@@ -64,6 +65,11 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
         self.color_distorts = color_distorts
+        self.distort_probs = {'clear': [1. for i in self.color_distorts], 'dark': [1. for i in self.color_distorts], 'opaque': [1. for i in self.color_distorts]}
+        if FLAGS.autocontrast:
+            self.autocontrast = lambda x: F_vis.autocontrast(x)
+        else:
+            self.autocontrast = lambda x: x
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -219,7 +225,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     if self.train: floor = floor_org
                 else:
                     img = c(img_load)
-                    if self.train: floor = c(floor_org)
+                    #if self.train: floor = c(floor_org)
 
                 if self.train:
                     if dataset == 'spill':
@@ -251,9 +257,9 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                                             patch.putalpha(np.random.randint(FLAGS.min_alpha,FLAGS.max_alpha))
                                             p_floor.paste(patch, (np.random.randint(floor.size[0]-patch.size[0]), np.random.randint(floor.size[1]-patch.size[1]+1)), patch)
-                                            all_patches.append(self.random_flip(self.preprocess(p_floor)))
+                                            all_patches.append(self.random_flip(self.preprocess(self.autocontrast(p_floor))))
                                         else:
-                                            all_patches.append(self.random_flip(self.preprocess(patch)))
+                                            all_patches.append(self.random_flip(self.preprocess(self.autocontrast(patch))))
 
                                     p_count += 1
                     elif dataset == 'puddle':
@@ -268,7 +274,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                             p_w,p_h = cr_w//num_x, cr_h//num_y
                             for x_ix in range(num_x):
                                 for y_ix in range(num_y):
-                                    all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                    all_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
 
                     elif dataset == 'video':
                         frame_bboxes = all_bboxes[i_ix]
@@ -337,9 +343,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
                                     if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
-                                        spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                        spill_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
                                     elif p_count in patch_samples:
-                                        sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                        sampled_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
 
                                     p_count += 1
                                     if len(spill_patches) == num_p:
@@ -355,7 +361,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                             p_w,p_h = img_w//num_x, img_h//num_y
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
-                                    all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                    all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                     else:
                         has_spill = True if i_ix < len(bboxes) else False
 
@@ -382,18 +388,18 @@ class CustomDataGen(torch.utils.data.Dataset):
                                             max_iou = iou
                                             spill_patch = img.crop(patch_bbox)
                                 
-                                all_patches.append(self.preprocess(spill_patch))
+                                all_patches.append(self.preprocess(self.autocontrast(spill_patch)))
                         else:
                             for crop_dim in [(2,3),(3,5),(4,7)]:
                                 num_y,num_x = crop_dim
                                 p_w,p_h = img_w//num_x, img_h//num_y
                                 for y_ix in range(num_y):
                                     for x_ix in range(num_x):
-                                        all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
+                                        all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                                 for y_ix in range(num_y-1):
                                     for x_ix in range(num_x-1):
-                                        all_patches.append(self.preprocess(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1)))))
+                                        all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))))))
 
             imgs.append(torch.stack(all_patches))
 
