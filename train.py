@@ -157,29 +157,37 @@ def main(argv):
             #img_patches = img_patches.to('cuda')
 
             sims = spill_det(img_patches)
-            losses, accs = loss_func(sims, num_patches, lab)
-            spill_loss,puddle_loss,vid_loss = losses
+            losses, accs, _ = loss_func(sims, num_patches, lab)
+            spill_loss_noaug,puddle_loss_noaug,vid_loss_noaug = losses
             spill_acc,puddle_acc,vid_acc = accs
 
-            no_aug_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
+            no_aug_loss = spill_loss_noaug.mean() + FLAGS.vid_coeff*vid_loss_noaug.mean() + FLAGS.puddle_coeff*puddle_loss_noaug.mean()
 
-            aug_patches = spill_det.aug_pred(img_patches)
+            aug_patches, aug_pred = spill_det.aug_pred(img_patches)
             aug_sims = spill_det(aug_patches)
-            losses, accs = loss_func(aug_sims, num_patches, lab)
-            spill_loss,puddle_loss,vid_loss = losses
+            losses, accs, max_idxs = loss_func(aug_sims, num_patches, lab)
+            spill_loss_aug,puddle_loss_aug,vid_loss_aug = losses
             spill_acc,puddle_acc,vid_acc = accs
 
-            aug_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
+            aug_loss = spill_loss_aug.mean() + FLAGS.vid_coeff*vid_loss_aug.mean() + FLAGS.puddle_coeff*puddle_loss_aug.mean()
 
-            augnet_target = (no_aug_loss-aug_loss).sigmoid()
-            augnet_loss = F.binary_cross_entropy(aug_pred,augnet_target.detach())
+            delta_loss = (torch.cat([vid_loss_noaug-vid_loss_aug, spill_loss_noaug-spill_loss_aug, puddle_loss_noaug-puddle_loss_aug])).reshape(-1,1).sigmoid()
+            
+            vid_ix,spill_ix,puddle_ix = max_idxs
+            aug_pred_vids = torch.gather(aug_pred[:4*num_vid_patches].reshape(4,num_vid_patches,3), 1, vid_ix).squeeze()
+            aug_pred_spills = torch.gather(aug_pred[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,3), 1, spill_ix).squeeze()
+            aug_pred_puddles = torch.gather(aug_pred[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,3), 1, puddle_ix).squeeze()
+            aug_pred = torch.cat([aug_pred_vids,aug_pred_spills,aug_pred_puddles], dim=0)
+            
+            augnet_target = (aug_pred*delta_loss + (1-aug_pred)*(1-delta_loss)).detach()
+            augnet_loss = F.binary_cross_entropy(aug_pred,augnet_target)
 
             final_loss = no_aug_loss + aug_loss + FLAGS.augnet_coeff*augnet_loss
 
             train_iter += 1
             log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
                         "No_Aug Loss": no_aug_loss, "Aug Loss": aug_loss, "AugNet Loss": augnet_loss, \
-                        "Video Loss": vid_loss, "Spill Loss":spill_loss, "Puddle Loss":puddle_loss, \
+                        "Video Loss": vid_loss_aug.mean(), "Spill Loss":spill_loss_aug.mean(), "Puddle Loss":puddle_loss_aug.mean(), \
                         "Video Accuracy": vid_acc, "Spill Accuracy": spill_acc, "Puddle Accuracy": puddle_acc}
 
             final_loss.backward()
@@ -200,51 +208,70 @@ def main(argv):
                     g['lr'] = 0.001
 
         val_count = 0
-        loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = \
-        acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
+        org_loss_2x3 = org_loss_3x5 = org_loss_4x7 = loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = \
+        acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
         for data in validation_generator:
             with torch.no_grad():
-                img_patches = data
+                img_patches = data.to('cuda')
 
-                sims = spill_det(img_patches.to('cuda'))
-                pos_sims = sims[:(10+3+5)*3*num_distorts].reshape(10+3+5,3,1*num_distorts).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*3*num_distorts:].reshape(FLAGS.val_batch,8+23+46,1*num_distorts).max(dim=2)[0]
+                aug_patches, aug_pred = spill_det.aug_pred(img_patches)
+
+                # Original patches
+                sims = spill_det(img_patches)
+                pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
 
                 sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
                 sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
-                sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
+                #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
+
+                org_loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
+                org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
+                #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+
+                # Augmented patches
+                sims = spill_det(aug_patches)
+                pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
+                neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
+
+                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
+                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
+                #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
 
                 loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
                 loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
-                loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+                #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
                 acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
                 acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
-                acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
+                #acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
                 acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
                 acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
-                acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
+                #acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
 
                 acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+5],dim=1)==0).float().mean()
                 acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+5],dim=1)==0).float().mean()
-                acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
+                #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
 
                 val_count += 1
 
         log_dict = {"Epoch":epoch}
+        log_dict["Org_val_loss_2x3"] = org_loss_2x3/val_count
+        log_dict["Org_val_loss_3x5"] = org_loss_3x5/val_count
+        #log_dict["Org_val_loss_4x7"] = org_loss_4x7/val_count
         log_dict["Val_loss_2x3"] = loss_2x3/val_count
         log_dict["Val_loss_3x5"] = loss_3x5/val_count
-        log_dict["Val_loss_4x7"] = loss_4x7/val_count
+        #log_dict["Val_loss_4x7"] = loss_4x7/val_count
         log_dict["Val_acc_clear_2x3"] = acc_clear_2x3/val_count
         log_dict["Val_acc_clear_3x5"] = acc_clear_3x5/val_count
-        log_dict["Val_acc_clear_4x7"] = acc_clear_4x7/val_count
+        #log_dict["Val_acc_clear_4x7"] = acc_clear_4x7/val_count
         log_dict["Val_acc_dark_2x3"] = acc_dark_2x3/val_count
         log_dict["Val_acc_dark_3x5"] = acc_dark_3x5/val_count
-        log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
+        #log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
         log_dict["Val_acc_opaque_2x3"] = acc_opaque_2x3/val_count
         log_dict["Val_acc_opaque_3x5"] = acc_opaque_3x5/val_count
-        log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
+        #log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
 
         wandb.log(log_dict)
 
@@ -263,26 +290,25 @@ def loss_func(sims, num_patches, lab):
     neg_sims = sims[4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(4,1)
 
     # Compute vid loss
-    p_sim = pos_sims_vids.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
+    p_sim,vid_ix = pos_sims_vids.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
     logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    vid_loss = F.cross_entropy(logits,lab[:4])
+    vid_loss = F.cross_entropy(logits,lab[:4],reduction='none')
     vid_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
     # Compute puddle loss
-    p_sim = pos_sims_puddles.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
+    p_sim,puddle_ix = pos_sims_puddles.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
     logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    puddle_loss = F.cross_entropy(logits,lab[:4])
+    puddle_loss = F.cross_entropy(logits,lab[:4],reduction='none')
     puddle_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
     # Compute spill loss
     neg_sims = neg_sims.tile(2,1)
-
-    p_sim = pos_sims_spills.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)[0]
+    p_sim,spill_ix = pos_sims_spills.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
     logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    spill_loss = F.cross_entropy(logits,lab[:8])
+    spill_loss = F.cross_entropy(logits,lab[:8],reduction='none')
     spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
-    return [spill_loss,puddle_loss,vid_loss], [spill_acc,puddle_acc,vid_acc]
+    return [spill_loss,puddle_loss,vid_loss], [spill_acc,puddle_acc,vid_acc], [vid_ix.tile(1,1,3),spill_ix.tile(1,1,3),puddle_ix.tile(1,1,3)]
 
 
 if __name__ == '__main__':

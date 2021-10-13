@@ -23,8 +23,6 @@ class SpillDetector(nn.Module):
         self.clip_model = clip_model
         self.dtype = torch.half if device=='cuda' else torch.float32
 
-        self.normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-
         self.color_transforms = [lambda x,y: F_vis.adjust_saturation(x,y*FLAGS.saturation_range), \
                                  lambda x,y: F_vis.adjust_hue(x,y*2*FLAGS.hue_range - FLAGS.hue_range), \
                                  lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]
@@ -54,9 +52,9 @@ class SpillDetector(nn.Module):
         return sims
 
     def build_aug_net(self):
-        self.aug_net = nn.Sequential(nn.Conv2d(3, 16, 3, stride=2),nn.ReLU(inplace=True),nn.Conv2d(16, 32, 3, stride=2),nn.ReLU(inplace=True), \
-                                     nn.Conv2d(32, 64, 3, stride=2),nn.ReLU(inplace=True),nn.Conv2d(64, 128, 3, stride=2),nn.ReLU(inplace=True), \
-                                     nn.AvgPool2d(13), nn.Linear(128,3))
+        self.aug_net = nn.Sequential(nn.Conv2d(3, 16, 3, stride=2), nn.ReLU(inplace=True), nn.Conv2d(16, 32, 3, stride=2), nn.BatchNorm2d(32), nn.ReLU(inplace=True), \
+                                     nn.Conv2d(32, 64, 3, stride=2), nn.ReLU(inplace=True), nn.Conv2d(64, 128, 3, stride=2), nn.BatchNorm2d(128), \
+                                     nn.MaxPool2d(13), nn.Flatten(), nn.Linear(128,3))
 
     def augs_compose(self, x, augs):
         aug_patches = []
@@ -65,14 +63,14 @@ class SpillDetector(nn.Module):
             for t,t_mag in zip(self.color_transforms,patch_aug):
                 new_patch = t(new_patch,t_mag)
 
-            aug_patches.append(self.normalize(new_patch))
+            aug_patches.append(new_patch)
 
         return torch.stack(aug_patches)
 
     def aug_pred(self, x):
-        print("-------",x.shape)
-        pred = self.aug_net(x).sigmoid()
-        print(pred.shape)
-        aug_imgs = self.augs_compose(x,pred)
+        pred = self.aug_net(x)
+        pred = pred.sigmoid()
+        with torch.no_grad():
+            aug_imgs = self.augs_compose(x,pred)
 
-        return aug_imgs
+        return aug_imgs, pred

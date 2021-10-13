@@ -65,7 +65,6 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
         self.color_distorts = color_distorts
-        self.distort_probs = {'clear': [1. for i in self.color_distorts], 'dark': [1. for i in self.color_distorts], 'opaque': [1. for i in self.color_distorts]}
         if FLAGS.autocontrast:
             self.autocontrast = lambda x: F_vis.autocontrast(x)
         else:
@@ -85,11 +84,11 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
                               'gallon':[(1,1),(1,2)],'react':[(1,1),(1,2)],'drinks':[(1,1),(2,3)],'store':[(1,1),(2,3)], \
-                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
+                              'pool':[(2,1),(3,1)]}
 
             self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
                                 'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
-                                'pool':[2,3],'val_vid':[6,10,14]}
+                                'pool':[2,3]}
         elif FLAGS.scale == 'large':
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
@@ -368,7 +367,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         if has_spill:
                             bb = bboxes[i_ix]
                             spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-                            for crop_dim in [(2,3),(3,5),(4,7)]:
+                            for crop_dim in [(2,3),(3,5)]:
                                 max_iou = 0.
                                 num_y,num_x = crop_dim
                                 p_w,p_h = img_w//num_x, img_h//num_y
@@ -390,7 +389,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 
                                 all_patches.append(self.preprocess(self.autocontrast(spill_patch)))
                         else:
-                            for crop_dim in [(2,3),(3,5),(4,7)]:
+                            for crop_dim in [(2,3),(3,5)]:
                                 num_y,num_x = crop_dim
                                 p_w,p_h = img_w//num_x, img_h//num_y
                                 for y_ix in range(num_y):
