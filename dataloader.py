@@ -224,7 +224,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     if self.train: floor = floor_org
                 else:
                     img = c(img_load)
-                    #if self.train: floor = c(floor_org)
+                    if self.train: floor = c(floor_org)
 
                 if self.train:
                     if dataset == 'spill':

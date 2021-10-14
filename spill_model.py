@@ -25,7 +25,8 @@ class SpillDetector(nn.Module):
 
         self.color_transforms = [lambda x,y: F_vis.adjust_saturation(x,y*FLAGS.saturation_range), \
                                  lambda x,y: F_vis.adjust_hue(x,y*2*FLAGS.hue_range - FLAGS.hue_range), \
-                                 lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]
+                                 lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range)]
+        #lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]
 
         if FLAGS.proj_head > 0:
             self.proj_head = nn.Linear(512,FLAGS.proj_head,bias=False)
@@ -34,6 +35,9 @@ class SpillDetector(nn.Module):
             self.prototypes = nn.Parameter(torch.randn(FLAGS.num_proto_sets,self.num_prototypes, 512).to(device), requires_grad=True)
 
         self.build_aug_net()
+
+        self.normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        self.inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
 
     def forward(self, x):
         with torch.no_grad():
@@ -59,11 +63,11 @@ class SpillDetector(nn.Module):
     def augs_compose(self, x, augs):
         aug_patches = []
         for patch,patch_aug in zip(x, augs):
-            new_patch = patch.clone()
+            new_patch = self.inv_normalize(patch.clone()).clamp(0,1)
             for t,t_mag in zip(self.color_transforms,patch_aug):
                 new_patch = t(new_patch,t_mag)
 
-            aug_patches.append(new_patch)
+            aug_patches.append(self.normalize(new_patch))
 
         return torch.stack(aug_patches)
 

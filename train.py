@@ -19,7 +19,7 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('exp','test','')
-flags.DEFINE_integer('num_workers',16,'')
+flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
 flags.DEFINE_integer('epochs',20,'')
 flags.DEFINE_integer('val_batch',10,'')
@@ -27,12 +27,12 @@ flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
-flags.DEFINE_integer('proj_head',128,'')
+flags.DEFINE_integer('proj_head',0,'')
 flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('num_proto_sets',1,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
-flags.DEFINE_float('margin',0.,'')
+flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.3,'')
 flags.DEFINE_float('vid_coeff',0.5,'')
 flags.DEFINE_string('scale','xlarge','')
@@ -41,11 +41,12 @@ flags.DEFINE_bool('autocontrast',True,'')
 
 # Learned Augmentation ranges
 flags.DEFINE_float('augnet_coeff',0.3,'')
-flags.DEFINE_float('saturation_range',3.,'')
+flags.DEFINE_float('saturation_range',2.,'')
 flags.DEFINE_float('hue_range',0.45,'')
 flags.DEFINE_float('gamma_range',2,'')
 
 # Color Augmentations
+flags.DEFINE_bool('inc_saturation',False,'')
 flags.DEFINE_bool('grayscale',False,'')
 flags.DEFINE_bool('hue_pos',False,'')
 flags.DEFINE_bool('hue_neg',False,'')
@@ -82,6 +83,8 @@ def main(argv):
     clip_model, preprocess = clip.load(FLAGS.clip_model,device='cuda')
 
     color_distorts = [None]
+    if FLAGS.inc_saturation:
+        color_distorts.append(lambda x: F_vis.adjust_saturation(x,2.5))
     if FLAGS.hue_pos:
         color_distorts.append(lambda x: F_vis.adjust_hue(x,0.25))
     if FLAGS.hue_neg:
@@ -103,18 +106,21 @@ def main(argv):
     training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
     validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False, color_distorts=color_distorts)
-    validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=2, pin_memory=True)
+    validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=4, pin_memory=True)
 
     spill_det = SpillDetector(clip_model)
     spill_det.to('cuda')
 
     #spill_det.load_state_dict(torch.load('weights/20Sep3.pt',map_location=torch.device('cuda')))
     if FLAGS.proj_head > 0:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters())+list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters()),'lr':0.001}], lr=FLAGS.lr)
     else:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr}], lr=FLAGS.lr)
 
     color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.2)
+
+    normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+    inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
 
     num_distorts = len(color_distorts)
 
@@ -131,7 +137,7 @@ def main(argv):
         num_spill_patches = 1*num_distorts
         num_puddle_patches = 3*num_distorts
     elif FLAGS.scale == 'xlarge':
-        num_vid_patches = 2*num_distorts
+        num_vid_patches = 3*num_distorts
         num_spill_patches = 1*num_distorts
         num_puddle_patches = 1*num_distorts
     elif FLAGS.scale == 'med':
@@ -150,10 +156,11 @@ def main(argv):
     val_iter = 0
     for epoch in range(epochs):
         optimizer.zero_grad()
+        #with torch.autograd.detect_anomaly():
         for data in training_generator:
             img_patches,_ = data
 
-            img_patches = color_aug(img_patches.to('cuda'))
+            img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
             #img_patches = img_patches.to('cuda')
 
             sims = spill_det(img_patches)
@@ -181,6 +188,7 @@ def main(argv):
             
             augnet_target = (aug_pred*delta_loss + (1-aug_pred)*(1-delta_loss)).detach()
             augnet_loss = F.binary_cross_entropy(aug_pred,augnet_target)
+            #aug_loss = augnet_loss = 0.
 
             final_loss = no_aug_loss + aug_loss + FLAGS.augnet_coeff*augnet_loss
 
@@ -259,19 +267,19 @@ def main(argv):
         log_dict = {"Epoch":epoch}
         log_dict["Org_val_loss_2x3"] = org_loss_2x3/val_count
         log_dict["Org_val_loss_3x5"] = org_loss_3x5/val_count
-        #log_dict["Org_val_loss_4x7"] = org_loss_4x7/val_count
+        log_dict["Org_val_loss_4x7"] = org_loss_4x7/val_count
         log_dict["Val_loss_2x3"] = loss_2x3/val_count
         log_dict["Val_loss_3x5"] = loss_3x5/val_count
-        #log_dict["Val_loss_4x7"] = loss_4x7/val_count
+        log_dict["Val_loss_4x7"] = loss_4x7/val_count
         log_dict["Val_acc_clear_2x3"] = acc_clear_2x3/val_count
         log_dict["Val_acc_clear_3x5"] = acc_clear_3x5/val_count
-        #log_dict["Val_acc_clear_4x7"] = acc_clear_4x7/val_count
+        log_dict["Val_acc_clear_4x7"] = acc_clear_4x7/val_count
         log_dict["Val_acc_dark_2x3"] = acc_dark_2x3/val_count
         log_dict["Val_acc_dark_3x5"] = acc_dark_3x5/val_count
-        #log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
+        log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
         log_dict["Val_acc_opaque_2x3"] = acc_opaque_2x3/val_count
         log_dict["Val_acc_opaque_3x5"] = acc_opaque_3x5/val_count
-        #log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
+        log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
 
         wandb.log(log_dict)
 
