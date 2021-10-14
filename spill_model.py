@@ -1,4 +1,5 @@
 import numpy as np
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,10 +24,9 @@ class SpillDetector(nn.Module):
         self.clip_model = clip_model
         self.dtype = torch.half if device=='cuda' else torch.float32
 
-        self.color_transforms = [lambda x,y: F_vis.adjust_saturation(x,y*FLAGS.saturation_range), \
+        '''self.color_transforms = [lambda x,y: F_vis.adjust_saturation(x,y*FLAGS.saturation_range), \
                                  lambda x,y: F_vis.adjust_hue(x,y*2*FLAGS.hue_range - FLAGS.hue_range), \
-                                 lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range)]
-        #lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]
+                                 lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]'''
 
         if FLAGS.proj_head > 0:
             self.proj_head = nn.Linear(512,FLAGS.proj_head,bias=False)
@@ -38,6 +38,17 @@ class SpillDetector(nn.Module):
 
         self.normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
         self.inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
+
+        self.all_augs = [lambda x: F_vis.adjust_saturation(x,2.5), \
+                         lambda x: F_vis.adjust_saturation(x,0.2), \
+                         lambda x: F_vis.adjust_hue(x,0.25), \
+                         lambda x: F_vis.adjust_hue(x,-0.4), \
+                         lambda x: F_vis.invert(x), \
+                         lambda x: F_vis.adjust_gamma(x,0.7), \
+                         lambda x: F_vis.adjust_gamma(x,2), \
+                         lambda x: F_vis.posterize(x,2)]
+
+        self.generate_augmentations()
 
     def forward(self, x):
         with torch.no_grad():
@@ -58,23 +69,40 @@ class SpillDetector(nn.Module):
     def build_aug_net(self):
         self.aug_net = nn.Sequential(nn.Conv2d(3, 16, 3, stride=2), nn.ReLU(inplace=True), nn.Conv2d(16, 32, 3, stride=2), nn.BatchNorm2d(32), nn.ReLU(inplace=True), \
                                      nn.Conv2d(32, 64, 3, stride=2), nn.ReLU(inplace=True), nn.Conv2d(64, 128, 3, stride=2), nn.BatchNorm2d(128), \
-                                     nn.MaxPool2d(13), nn.Flatten(), nn.Linear(128,3))
+                                     nn.MaxPool2d(13), nn.Flatten(), nn.Linear(128, FLAGS.num_augs))
 
     def augs_compose(self, x, augs):
         aug_patches = []
         for patch,patch_aug in zip(x, augs):
             new_patch = self.inv_normalize(patch.clone()).clamp(0,1)
-            for t,t_mag in zip(self.color_transforms,patch_aug):
-                new_patch = t(new_patch,t_mag)
+            sampled_augs = self.aug_set[torch.multinomial(patch_aug,1)[0]]
+            for t in sampled_augs:
+                new_patch = t(new_patch)
 
             aug_patches.append(self.normalize(new_patch))
 
         return torch.stack(aug_patches)
 
-    def aug_pred(self, x):
+    def aug_pred(self, x, apply_all=False):
         pred = self.aug_net(x)
-        pred = pred.sigmoid()
         with torch.no_grad():
-            aug_imgs = self.augs_compose(x,pred)
+            if apply_all:
+                aug_imgs = []
+                for augs in self.aug_set:
+                    x_trans = x.clone()
+                    for t in augs:
+                        x_trans = t(x_trans)
+                    aug_imgs.append(x_trans)
+                aug_imgs = torch.cat(aug_imgs, dim=0)
+            else:
+                aug_imgs = self.augs_compose(x, F.softmax(pred, dim=1))
 
         return aug_imgs, pred
+
+    def generate_augmentations(self):
+        self.aug_set = [[]]
+        for i in range(FLAGS.num_augs-1):
+            self.aug_set.append([])
+            num_compose = np.random.randint(1,FLAGS.max_compose+1)
+            for c in range(num_compose):
+                self.aug_set[-1].append(random.sample(self.all_augs))

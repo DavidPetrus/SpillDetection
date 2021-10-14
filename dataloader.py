@@ -341,9 +341,10 @@ class CustomDataGen(torch.utils.data.Dataset):
                             p_count = 0
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
-                                    if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].mean() > 0.:
+                                    print(spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].sum())
+                                    if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].sum() > 5000.:
                                         spill_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
-                                    elif p_count in patch_samples:
+                                    elif cat==1 and p_count in patch_samples:
                                         sampled_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
 
                                     p_count += 1
@@ -352,7 +353,10 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 if len(spill_patches) == num_p:
                                     break
 
-                            all_patches.extend(spill_patches + sampled_patches[:num_p-len(spill_patches)])
+                            if cat == 0:
+                                all_patches.append(random.sample(spill_patches))
+                            else:
+                                all_patches.extend(sampled_patches)
                 else:        
                     if dataset == 'pool':
                         for crop_dim in [(2,1),(3,1)]:
