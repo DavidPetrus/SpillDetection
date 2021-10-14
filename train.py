@@ -45,7 +45,7 @@ flags.DEFINE_integer('max_compose',3,'')
 flags.DEFINE_float('aug_temp',0.05,'')
 
 # Learned Augmentation ranges
-flags.DEFINE_float('augnet_coeff',3.,'')
+flags.DEFINE_float('augnet_coeff',1.,'')
 flags.DEFINE_float('saturation_range',3.,'')
 flags.DEFINE_float('hue_range',0.45,'')
 flags.DEFINE_float('gamma_range',2,'')
@@ -118,9 +118,9 @@ def main(argv):
 
     #spill_det.load_state_dict(torch.load('weights/20Sep3.pt',map_location=torch.device('cuda')))
     if FLAGS.proj_head > 0:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters()),'lr':0.001}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters())+list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
     else:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
 
     color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.2)
 
@@ -161,10 +161,14 @@ def main(argv):
     val_iter = 0
     for epoch in range(epochs):
         optimizer.zero_grad()
+        #with torch.autograd.detect_anomaly():
         for data in training_generator:
             img_patches,_ = data
 
-            img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
+            if FLAGS.autocontrast:
+                img_patches = normalize(F_vis.autocontrast(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1))))
+            else:
+                img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
             #img_patches = img_patches.to('cuda')
 
             pos_patches = img_patches[:4+8+4]
@@ -178,15 +182,15 @@ def main(argv):
             pos_sims = sims[:FLAGS.num_augs*(4+8+4)].reshape(FLAGS.num_augs, 4+8+4).movedim(0,1)
             neg_sims = sims[FLAGS.num_augs*(4+8+4):]
 
-            augnet_loss = F.kl_div(pos_pred, -pos_sims.detach()/FLAGS.aug_temp, log_target=True)
+            augnet_loss = -torch.sum(F.log_softmax(pos_pred, dim=1) * F.softmax(-pos_sims/FLAGS.aug_temp, dim=1).detach(), dim=1).mean()
 
-            pos_sims = torch.gather(pos_sims, 1, torch.multinomial(F.softmax(pos_pred, dim=1), 1)[:,0]).unsqueeze(1)
+            pos_sims = torch.gather(pos_sims, 1, torch.multinomial(F.softmax(pos_pred, dim=1), 1))
             losses, accs = loss_func(torch.cat([pos_sims,neg_sims], dim=0), num_patches, lab)
 
             spill_loss,puddle_loss,vid_loss = losses
             spill_acc,puddle_acc,vid_acc = accs
 
-            final_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
+            final_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss + FLAGS.augnet_coeff*augnet_loss
 
             '''sims = spill_det(img_patches)
             losses, accs, _ = loss_func(sims, num_patches, lab)
@@ -246,8 +250,10 @@ def main(argv):
         for data in validation_generator:
             with torch.no_grad():
                 img_patches = data.to('cuda')
+                if FLAGS.autocontrast:
+                    img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
 
-                aug_patches, aug_pred = spill_det.aug_pred(img_patches)
+                img_patches, aug_pred = spill_det.aug_pred(img_patches)
 
                 # Original patches
                 sims = spill_det(img_patches)
@@ -262,7 +268,7 @@ def main(argv):
                 org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
                 #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
-                # Augmented patches
+                '''# Augmented patches
                 sims = spill_det(aug_patches)
                 pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
                 neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
@@ -273,7 +279,7 @@ def main(argv):
 
                 loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
                 loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
-                #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+                #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])'''
 
                 acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
                 acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()

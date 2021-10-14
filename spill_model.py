@@ -45,8 +45,7 @@ class SpillDetector(nn.Module):
                          lambda x: F_vis.adjust_hue(x,-0.4), \
                          lambda x: F_vis.invert(x), \
                          lambda x: F_vis.adjust_gamma(x,0.7), \
-                         lambda x: F_vis.adjust_gamma(x,2), \
-                         lambda x: F_vis.posterize(x,2)]
+                         lambda x: F_vis.adjust_gamma(x,2)]
 
         self.generate_augmentations()
 
@@ -74,7 +73,7 @@ class SpillDetector(nn.Module):
     def augs_compose(self, x, augs):
         aug_patches = []
         for patch,patch_aug in zip(x, augs):
-            new_patch = self.inv_normalize(patch.clone()).clamp(0,1)
+            new_patch = self.inv_normalize(patch).clamp(0,1)
             sampled_augs = self.aug_set[torch.multinomial(patch_aug,1)[0]]
             for t in sampled_augs:
                 new_patch = t(new_patch)
@@ -89,9 +88,10 @@ class SpillDetector(nn.Module):
             if apply_all:
                 aug_imgs = []
                 for augs in self.aug_set:
-                    x_trans = x.clone()
+                    x_trans = self.inv_normalize(x).clamp(0,1)
                     for t in augs:
                         x_trans = t(x_trans)
+                    x_trans = self.normalize(x_trans)
                     aug_imgs.append(x_trans)
                 aug_imgs = torch.cat(aug_imgs, dim=0)
             else:
@@ -105,4 +105,4 @@ class SpillDetector(nn.Module):
             self.aug_set.append([])
             num_compose = np.random.randint(1,FLAGS.max_compose+1)
             for c in range(num_compose):
-                self.aug_set[-1].append(random.sample(self.all_augs))
+                self.aug_set[-1].append(random.choice(self.all_augs))

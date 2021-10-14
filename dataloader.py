@@ -65,10 +65,10 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
         self.color_distorts = color_distorts
-        if FLAGS.autocontrast:
-            self.autocontrast = lambda x: F_vis.autocontrast(x)
-        else:
-            self.autocontrast = lambda x: x
+        #if FLAGS.autocontrast:
+        #    self.autocontrast = lambda x: F_vis.autocontrast(x)
+        #else:
+        self.autocontrast = lambda x: x
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -323,11 +323,13 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                         crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
                         spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
+                        spill_pix_sum = spill_mask.sum()
 
                         crop = img.crop((cr_l,cr_t,cr_r,cr_b))
                         cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
 
                         vid_group = vids[0] if i_ix<4 else vids[1]
+                        spill_patches = []
                         crop_dims = self.crop_dims[vid_group]
                         num_patches = self.num_patches[vid_group]
                         for num_p,cr_dim in zip(num_patches,crop_dims):
@@ -336,27 +338,26 @@ class CustomDataGen(torch.utils.data.Dataset):
                             num_y = max_dim if cr_h > cr_w else min_dim
                             p_w,p_h = cr_w//num_x, cr_h//num_y
                             patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
-                            spill_patches = []
                             sampled_patches = []
                             p_count = 0
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
-                                    print(spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].sum())
-                                    if cat==0 and spill_mask[p_h*y_ix:p_h*(y_ix+1),p_w*x_ix:p_w*(x_ix+1)].sum() > 5000.:
-                                        spill_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
+                                    if cat==0:
+                                        patch_spill_sum = spill_mask[p_h*y_ix+max(0,(p_h-p_w)//2):p_h*(y_ix+1)-max(0,(p_h-p_w)//2),p_w*x_ix+max(0,(p_w-p_h)//2):p_w*(x_ix+1)-max(0,(p_w-p_h)//2)].sum()
+                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.8*spill_pix_sum:
+                                            spill_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
                                     elif cat==1 and p_count in patch_samples:
                                         sampled_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
 
                                     p_count += 1
-                                    if len(spill_patches) == num_p:
-                                        break
-                                if len(spill_patches) == num_p:
-                                    break
 
-                            if cat == 0:
-                                all_patches.append(random.sample(spill_patches))
-                            else:
+                            if cat==1:
                                 all_patches.extend(sampled_patches)
+
+                        if cat==0:
+                            if len(spill_patches) == 0:
+                                print(spill_mask.sum(), spill_mask.shape)
+                            all_patches.append(random.choice(spill_patches))
                 else:        
                     if dataset == 'pool':
                         for crop_dim in [(2,1),(3,1)]:
