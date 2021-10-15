@@ -49,6 +49,9 @@ class SpillDetector(nn.Module):
 
         self.generate_augmentations()
 
+        self.five_crop = torchvision.transforms.FiveCrop(134)
+        self.resize = torchvision.transforms.Resize(224, interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
+
     def forward(self, x):
         with torch.no_grad():
             img_features = self.clip_model.encode_image(x).to(torch.float32)
@@ -78,31 +81,58 @@ class SpillDetector(nn.Module):
             for t in sampled_augs:
                 new_patch = t(new_patch)
 
-            aug_patches.append(self.normalize(new_patch))
+            if FLAGS.autocontrast:
+                aug_patches.append(self.normalize(F_vis.autocontrast(new_patch)))
+            else:
+                aug_patches.append(self.normalize(new_patch))
 
         return torch.stack(aug_patches)
 
-    def aug_pred(self, x, apply_all=False):
+    def aug_pred(self, x, apply_all=False, val=False, five_crop=False, aug_indices=None):
+        temp = 100 if val else 1.
+        if five_crop:
+            crop_ls = []
+            crops = self.five_crop(x) + (x,)
+            for cr in crops:
+                x_trans = self.resize(cr)
+                crop_ls.append(x_trans)
+            x = torch.cat(crop_ls, dim=0)
+
         pred = self.aug_net(x)
+        #pred = logits[:FLAGS.num_augs]
+        #crop_pred = logits[FLAGS.num_augs:-1]
         with torch.no_grad():
             if apply_all:
                 aug_imgs = []
-                for augs in self.aug_set:
+                if aug_indices is not None:
+                    aug_set = [self.aug_set[i] for i in aug_indices]
+                else:
+                    aug_set = self.aug_set
+
+                for augs in aug_set:
                     x_trans = self.inv_normalize(x).clamp(0,1)
                     for t in augs:
                         x_trans = t(x_trans)
-                    x_trans = self.normalize(x_trans)
+
+                    if FLAGS.autocontrast:
+                        x_trans = self.normalize(F_vis.autocontrast(x_trans))
+                    else:
+                        x_trans = self.normalize(x_trans)
                     aug_imgs.append(x_trans)
                 aug_imgs = torch.cat(aug_imgs, dim=0)
             else:
-                aug_imgs = self.augs_compose(x, F.softmax(pred, dim=1))
+                aug_imgs = self.augs_compose(x, F.softmax(pred/temp, dim=1))
 
         return aug_imgs, pred
 
     def generate_augmentations(self):
         self.aug_set = [[]]
         for i in range(FLAGS.num_augs-1):
+            #self.aug_set.append([self.all_augs[i]])
             self.aug_set.append([])
             num_compose = np.random.randint(1,FLAGS.max_compose+1)
             for c in range(num_compose):
                 self.aug_set[-1].append(random.choice(self.all_augs))
+
+        print(self.all_augs)
+        print(self.aug_set)

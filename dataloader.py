@@ -40,11 +40,11 @@ class CustomDataGen(torch.utils.data.Dataset):
 
             self.all_floors = glob.glob(directory+'/floors/*')
         else:
-            self.val_no_spills = glob.glob(directory+"/no_spills/*/*")
-
             self.val_frames = {}
+            self.val_no_spills = {}
             for t in ['clear','dark','opaque']:
                 self.val_frames[t] = {}
+                self.val_no_spills[t] = {}
 
                 v_dir = directory+"/{}_spills".format(t)
                 vids = glob.glob(v_dir+"/*.txt")
@@ -56,19 +56,18 @@ class CustomDataGen(torch.utils.data.Dataset):
                     with open(v,'r') as fp:
                         lines = fp.read().splitlines()
 
-                    no_spill_frames = []
-                    spill_frames = {}
                     for line in lines:
                         if ' spill' in line:
                             fr,lab,lux,luy,rbx,rby = line.split(' ')
                             if v[:-4]+"/{}.png".format(fr[2:]) in imgs:
                                 self.val_frames[t][v[:-4]].append((v[:-4]+"/{}.png".format(fr[2:]),(int(lux),int(luy),int(rbx),int(rby))))
 
+                    for cam in glob.glob(directory+"/no_spills/*"):
+                        if cam.split('/')[-1] in v:
+                            self.val_no_spills[t][v[:-4]] = glob.glob(cam+"/*")
+                            break
+
         self.color_distorts = color_distorts
-        #if FLAGS.autocontrast:
-        #    self.autocontrast = lambda x: F_vis.autocontrast(x)
-        #else:
-        self.autocontrast = lambda x: x
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -256,9 +255,9 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                                             patch.putalpha(np.random.randint(FLAGS.min_alpha,FLAGS.max_alpha))
                                             p_floor.paste(patch, (np.random.randint(floor.size[0]-patch.size[0]), np.random.randint(floor.size[1]-patch.size[1]+1)), patch)
-                                            all_patches.append(self.random_flip(self.preprocess(self.autocontrast(p_floor))))
+                                            all_patches.append(self.random_flip(self.preprocess(p_floor)))
                                         else:
-                                            all_patches.append(self.random_flip(self.preprocess(self.autocontrast(patch))))
+                                            all_patches.append(self.random_flip(self.preprocess(patch)))
 
                                     p_count += 1
                     elif dataset == 'puddle':
@@ -273,7 +272,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                             p_w,p_h = cr_w//num_x, cr_h//num_y
                             for x_ix in range(num_x):
                                 for y_ix in range(num_y):
-                                    all_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
+                                    all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                     elif dataset == 'video':
                         frame_bboxes = all_bboxes[i_ix]
@@ -345,9 +344,9 @@ class CustomDataGen(torch.utils.data.Dataset):
                                     if cat==0:
                                         patch_spill_sum = spill_mask[p_h*y_ix+max(0,(p_h-p_w)//2):p_h*(y_ix+1)-max(0,(p_h-p_w)//2),p_w*x_ix+max(0,(p_w-p_h)//2):p_w*(x_ix+1)-max(0,(p_w-p_h)//2)].sum()
                                         if patch_spill_sum > 3000 or patch_spill_sum > 0.8*spill_pix_sum:
-                                            spill_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
+                                            spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                     elif cat==1 and p_count in patch_samples:
-                                        sampled_patches.append(self.random_flip(self.preprocess(self.autocontrast(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))))
+                                        sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                                     p_count += 1
 
@@ -365,45 +364,30 @@ class CustomDataGen(torch.utils.data.Dataset):
                             p_w,p_h = img_w//num_x, img_h//num_y
                             for y_ix in range(num_y):
                                 for x_ix in range(num_x):
-                                    all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
+                                    all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
                     else:
                         has_spill = True if i_ix < len(bboxes) else False
+                        val_crop_x = [(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)]
+                        val_crop_y = [(0.,0.5),(0.25,0.75),(0.5,1.)]
 
                         if has_spill:
                             bb = bboxes[i_ix]
                             spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-                            for crop_dim in [(2,3),(3,5)]:
-                                max_iou = 0.
-                                num_y,num_x = crop_dim
-                                p_w,p_h = img_w//num_x, img_h//num_y
-                                for y_ix in range(num_y):
-                                    for x_ix in range(num_x):
-                                        patch_bbox = (p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))
-                                        iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
-                                        if iou > max_iou:
-                                            max_iou = iou
-                                            spill_patch = img.crop(patch_bbox)
-
-                                for y_ix in range(num_y-1):
-                                    for x_ix in range(num_x-1):
-                                        patch_bbox = (p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))
-                                        iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
-                                        if iou > max_iou:
-                                            max_iou = iou
-                                            spill_patch = img.crop(patch_bbox)
-                                
-                                all_patches.append(self.preprocess(self.autocontrast(spill_patch)))
+                            max_iou = 0.
+                            for y_dim in val_crop_y:
+                                for x_dim in val_crop_x:
+                                    patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
+                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                    if iou > max_iou:
+                                        max_iou = iou
+                                        spill_patch = img.crop(patch_bbox)
+                            
+                            all_patches.append(self.preprocess(spill_patch))
                         else:
-                            for crop_dim in [(2,3),(3,5)]:
-                                num_y,num_x = crop_dim
-                                p_w,p_h = img_w//num_x, img_h//num_y
-                                for y_ix in range(num_y):
-                                    for x_ix in range(num_x):
-                                        all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
-
-                                for y_ix in range(num_y-1):
-                                    for x_ix in range(num_x-1):
-                                        all_patches.append(self.preprocess(self.autocontrast(img.crop((p_w//2+p_w*x_ix,p_h//2+p_h*y_ix,p_w//2+p_w*(x_ix+1),p_h//2+p_h*(y_ix+1))))))
+                            for y_dim in val_crop_y:
+                                for x_dim in val_crop_x:
+                                    patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
+                                    all_patches.append(self.preprocess(img.crop(patch_bbox)))
 
             imgs.append(torch.stack(all_patches))
 
@@ -501,9 +485,14 @@ class CustomDataGen(torch.utils.data.Dataset):
                     frames.append(Image.open(fr_sample))
                     bboxes.append(bbox)
 
-            no_spill_frames = random.sample(self.val_no_spills,FLAGS.val_batch)
+            for t in ['clear','dark','opaque']:
+                for v,_ in self.val_frames[t].items():
+                    for sample in random.sample(self.val_no_spills[t][v],3):
+                        frames.append(Image.open(sample))
+
+            '''no_spill_frames = random.sample(self.val_no_spills,FLAGS.val_batch)
             for ns_frame in no_spill_frames:
-                frames.append(Image.open(ns_frame))
+                frames.append(Image.open(ns_frame))'''
 
             imgs = self.__get_image__(index, dataset='val_video', sampled_frames=(frames,bboxes))
             pos_images = imgs[:len(bboxes)]

@@ -33,14 +33,14 @@ flags.DEFINE_integer('num_proto_sets',1,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
-flags.DEFINE_float('puddle_coeff',0.3,'')
+flags.DEFINE_float('puddle_coeff',0.0,'')
 flags.DEFINE_float('vid_coeff',0.5,'')
 flags.DEFINE_string('scale','xlarge','')
 
 flags.DEFINE_bool('autocontrast',True,'')
 
 # Multiple Augmentations
-flags.DEFINE_integer('num_augs',30,'')
+flags.DEFINE_integer('num_augs',20,'')
 flags.DEFINE_integer('max_compose',3,'')
 flags.DEFINE_float('aug_temp',0.05,'')
 
@@ -122,7 +122,7 @@ def main(argv):
     else:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.6,0.6,0.6,0.2)
+    color_aug = torchvision.transforms.ColorJitter(0.8,0.3,2,0.4)
 
     normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
@@ -153,6 +153,8 @@ def main(argv):
     num_patches = [num_vid_patches,num_spill_patches,num_puddle_patches]
 
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
+
+    aug_loss_avg = np.zeros(FLAGS.num_augs)
 
     min_acc = 0.
     total_loss = 0.
@@ -245,28 +247,52 @@ def main(argv):
                     g['lr'] = 0.001
 
         val_count = 0
+        num_crop_dims = 1
         org_loss_2x3 = org_loss_3x5 = org_loss_4x7 = loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = \
         acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
+
+        probs = 0.1 + (aug_loss_avg-aug_loss_avg.min())/(aug_loss_avg.max()-aug_loss_avg.min()+0.01)
+        probs /= probs.sum()
+        aug_loss_sums = np.array([0. for i in range(FLAGS.num_augs)])
+        aug_loss_count = np.array([0 for i in range(FLAGS.num_augs)])
+
         for data in validation_generator:
             with torch.no_grad():
                 img_patches = data.to('cuda')
                 if FLAGS.autocontrast:
                     img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
 
-                img_patches, aug_pred = spill_det.aug_pred(img_patches)
+                pos_patches = img_patches[:(10+3+4)*num_crop_dims]
+                neg_patches = img_patches[(10+3+4)*num_crop_dims:]
+
+                aug_indices = np.random.choice(FLAGS.num_augs, size=4, replace=False, p=probs)
+
+                pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True, val=True, five_crop=False, aug_indices=aug_indices)
+                neg_patches, neg_pred = spill_det.aug_pred(neg_patches, apply_all=True, val=True, aug_indices=aug_indices)
+
+                sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))
+                pos_sims,m_idxs = sims[:4*1*(10+3+4)*num_crop_dims].reshape(4,1,(10+3+4),num_crop_dims).max(dim=1)[0].max(dim=0)
+                #print(m_idxs)
+                neg_sims = sims[4*1*(10+3+4)*num_crop_dims*num_distorts:].reshape(4,(10+3+4),3*12,1*num_distorts).max(dim=-1)[0].max(dim=0)[0]
+
+                #img_patches, aug_pred = spill_det.aug_pred(img_patches, val=True)
 
                 # Original patches
-                sims = spill_det(img_patches)
-                pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
+                #sims = spill_det(img_patches)
+                #pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
+                #neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
 
-                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
-                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
+                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims],dim=1)
+                #sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
                 #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
 
-                org_loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
-                org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
+                batch_loss = F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+4])
+                org_loss_2x3 += batch_loss
+                #org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
                 #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
+
+                aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
+                aug_loss_count[aug_indices] += 1
 
                 '''# Augmented patches
                 sims = spill_det(aug_patches)
@@ -282,18 +308,20 @@ def main(argv):
                 #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])'''
 
                 acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
-                acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
+                #acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
                 #acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
                 acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
-                acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
+                #acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
                 #acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
 
-                acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+5],dim=1)==0).float().mean()
-                acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+5],dim=1)==0).float().mean()
+                acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+4],dim=1)==0).float().mean()
+                #acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+5],dim=1)==0).float().mean()
                 #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
 
                 val_count += 1
+
+        aug_loss_avg = aug_loss_sums/aug_loss_count
 
         log_dict = {"Epoch":epoch}
         log_dict["Org_val_loss_2x3"] = org_loss_2x3/val_count
