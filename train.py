@@ -68,7 +68,10 @@ flags.DEFINE_float('min_spill_frac',0.4,'')
 flags.DEFINE_float('max_spill_frac',1.,'')
 flags.DEFINE_float('superimpose_frac',0.,'')
 
+batch_img_nums = [2+4,4,0]
+
 def main(argv):
+    global batch_img_nums
 
     wandb.init(project="SpillDetection",name=FLAGS.exp)
     wandb.config.update(flags.FLAGS)
@@ -108,7 +111,7 @@ def main(argv):
         color_distorts.append(lambda x: F_vis.rgb_to_grayscale(x,3))
         
 
-    training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts)
+    training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts, batch_nums=batch_img_nums)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
     validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False, color_distorts=color_distorts)
     validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=4, pin_memory=True)
@@ -155,8 +158,6 @@ def main(argv):
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
 
     aug_loss_avg = np.zeros(FLAGS.num_augs)
-
-    batch_img_nums = [2,4,4,0]
 
     min_acc = 0.
     total_loss = 0.
@@ -322,31 +323,36 @@ def main(argv):
             min_acc = sum(val_accs)
 
 def loss_func(sims, num_patches, lab):
+    global batch_img_nums
+
     num_vid_patches,num_spill_patches,num_puddle_patches = num_patches
 
-    pos_sims_vids = sims[:4*num_vid_patches].reshape(4,num_vid_patches,1)
-    pos_sims_spills = sims[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,1)
-    pos_sims_puddles = sims[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,1)
-    neg_sims = sims[4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(4,1)
+    pos_sims_vids = sims[:batch_img_nums[0]*num_vid_patches].reshape(batch_img_nums[0],num_vid_patches,1)
+    pos_sims_spills = sims[batch_img_nums[0]*num_vid_patches:batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches].reshape(batch_img_nums[1],num_spill_patches,1)
+    pos_sims_puddles = sims[batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches:batch_img_nums[0]*num_vid_patches + \
+                        batch_img_nums[1]*num_spill_patches + batch_img_nums[2]*num_puddle_patches].reshape(batch_img_nums[2],num_puddle_patches,1)
+    neg_sims = sims[batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches + batch_img_nums[2]*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(max(batch_img_nums),1)
 
     # Compute vid loss
     p_sim,vid_ix = pos_sims_vids.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
-    logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    vid_loss = F.cross_entropy(logits,lab[:4],reduction='mean')
+    logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims[:batch_img_nums[0]]],dim=1)/FLAGS.temperature
+    vid_loss = F.cross_entropy(logits,lab[:batch_img_nums[0]],reduction='mean')
     vid_acc = (torch.argmax(logits,dim=1)==0).float().mean()
 
-    # Compute puddle loss
-    p_sim,puddle_ix = pos_sims_puddles.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
-    logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    puddle_loss = F.cross_entropy(logits,lab[:4],reduction='mean')
-    puddle_acc = (torch.argmax(logits,dim=1)==0).float().mean()
-
     # Compute spill loss
-    neg_sims = neg_sims.tile(2,1)
     p_sim,spill_ix = pos_sims_spills.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
-    logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims],dim=1)/FLAGS.temperature
-    spill_loss = F.cross_entropy(logits,lab[:8],reduction='mean')
+    logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims[:batch_img_nums[1]]],dim=1)/FLAGS.temperature
+    spill_loss = F.cross_entropy(logits,lab[:batch_img_nums[1]],reduction='mean')
     spill_acc = (torch.argmax(logits,dim=1)==0).float().mean()
+
+    # Compute puddle loss
+    if batch_img_nums[2] > 0:
+        p_sim,puddle_ix = pos_sims_puddles.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
+        logits = torch.cat([p_sim[:,:,0]-FLAGS.margin,neg_sims[:batch_img_nums[2]]],dim=1)/FLAGS.temperature
+        puddle_loss = F.cross_entropy(logits,lab[:batch_img_nums[2]],reduction='mean')
+        puddle_acc = (torch.argmax(logits,dim=1)==0).float().mean()
+    else:
+        puddle_loss = puddle_acc = 0.
 
     return [spill_loss,puddle_loss,vid_loss], [spill_acc,puddle_acc,vid_acc]#, [vid_ix.tile(1,1,3),spill_ix.tile(1,1,3),puddle_ix.tile(1,1,3)]
 

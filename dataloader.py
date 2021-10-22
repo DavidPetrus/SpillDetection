@@ -19,7 +19,7 @@ FLAGS = flags.FLAGS
 
 class CustomDataGen(torch.utils.data.Dataset):
     
-    def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True,color_distorts=None):
+    def __init__(self, directory, batch_size, preprocess,input_size=(224, 224, 3),train=True,color_distorts=None,batch_nums=None):
         
         if train:
             self.spill_images = glob.glob(directory+'/spills/*')
@@ -64,6 +64,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                             break
 
         self.color_distorts = color_distorts
+
+        self.batch_nums = batch_nums
 
         self.preprocess = preprocess
         if FLAGS.scale == 'all':
@@ -310,7 +312,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
 
                         if dataset=='video':
-                            vid_group = vids[0] if i_ix<2 else vids[1]
+                            vid_group = vids[0] if i_ix<self.batch_nums[0]//3 else vids[1]
                         elif dataset=='morningside':
                             vid_group = 'morningside'
 
@@ -409,8 +411,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                         fr,lab,lux,luy,rbx,rby = line.split(' ')
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
-                neg_fr_idxs = random.sample(no_spill_frames,2)
-                pos_fr_idxs = random.sample(list(spill_frames.keys()),2)
+                neg_fr_idxs = random.sample(no_spill_frames,self.batch_nums[0]//6)
+                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//6)
                 pos_bboxes = []
                 for fr in pos_fr_idxs:
                     pos_bboxes.extend(spill_frames[fr])
@@ -458,7 +460,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         fr,lab,lux,luy,rbx,rby = line.split(' ')
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
-                pos_fr_idxs = random.sample(list(spill_frames.keys()),2)
+                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//3)
                 bboxes = []
                 for fr in pos_fr_idxs:
                     frame = Image.open(vid[:-4]+'/{}.png'.format(fr))
@@ -468,7 +470,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                     bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
 
                 neg_vid = cv2.VideoCapture(random.choice(self.morningside_no_spill[vid]))
-                for n in range(2):
+                for n in range(self.batch_nums[0]//3):
                     neg_vid.set(cv2.CAP_PROP_POS_FRAMES,random.randint(1,int(neg_vid.get(cv2.CAP_PROP_FRAME_COUNT))-1))
                     _,frame = neg_vid.read()
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -483,14 +485,14 @@ class CustomDataGen(torch.utils.data.Dataset):
         
             floors_sample = random.sample(self.all_floors,3)
             self.floors = [Image.open(floor) for floor in floors_sample]
-            for ix in range(self.batch_size):
+            for ix in range(self.batch_nums[1]):
                 imgs = self.__get_image__(index+ix, dataset='spill')
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
                 if FLAGS.scale == 'large':
                     neg_images.append(imgs[2])
 
-            for ix in range(self.batch_size//2):
+            for ix in range(self.batch_nums[2]):
                 imgs = self.__get_image__(index+ix, dataset='puddle')
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
