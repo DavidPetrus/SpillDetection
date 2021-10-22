@@ -156,6 +156,8 @@ def main(argv):
 
     aug_loss_avg = np.zeros(FLAGS.num_augs)
 
+    batch_img_nums = [2,4,4,0]
+
     min_acc = 0.
     total_loss = 0.
     step_loss = 0.
@@ -173,16 +175,16 @@ def main(argv):
                 img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
             #img_patches = img_patches.to('cuda')
 
-            pos_patches = img_patches[:4+8+4]
-            neg_patches = img_patches[4+8+4:]
+            pos_patches = img_patches[:sum(batch_img_nums)]
+            neg_patches = img_patches[sum(batch_img_nums):]
 
             pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True)
             with torch.no_grad():
                 neg_patches, neg_pred = spill_det.aug_pred(neg_patches)
 
             sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))
-            pos_sims = sims[:FLAGS.num_augs*(4+8+4)].reshape(FLAGS.num_augs, 4+8+4).movedim(0,1)
-            neg_sims = sims[FLAGS.num_augs*(4+8+4):]
+            pos_sims = sims[:FLAGS.num_augs*sum(batch_img_nums)].reshape(FLAGS.num_augs, sum(batch_img_nums)).movedim(0,1)
+            neg_sims = sims[FLAGS.num_augs*sum(batch_img_nums):]
 
             augnet_loss = -torch.sum(F.log_softmax(pos_pred, dim=1) * F.softmax(-pos_sims/FLAGS.aug_temp, dim=1).detach(), dim=1).mean()
 
@@ -193,35 +195,6 @@ def main(argv):
             spill_acc,puddle_acc,vid_acc = accs
 
             final_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss + FLAGS.augnet_coeff*augnet_loss
-
-            '''sims = spill_det(img_patches)
-            losses, accs, _ = loss_func(sims, num_patches, lab)
-            spill_loss_noaug,puddle_loss_noaug,vid_loss_noaug = losses
-            spill_acc,puddle_acc,vid_acc = accs
-
-            no_aug_loss = spill_loss_noaug.mean() + FLAGS.vid_coeff*vid_loss_noaug.mean() + FLAGS.puddle_coeff*puddle_loss_noaug.mean()
-
-            aug_patches, aug_pred = spill_det.aug_pred(img_patches)
-            aug_sims = spill_det(aug_patches)
-            losses, accs, max_idxs = loss_func(aug_sims, num_patches, lab)
-            spill_loss_aug,puddle_loss_aug,vid_loss_aug = losses
-            spill_acc,puddle_acc,vid_acc = accs
-
-            aug_loss = spill_loss_aug.mean() + FLAGS.vid_coeff*vid_loss_aug.mean() + FLAGS.puddle_coeff*puddle_loss_aug.mean()
-
-            delta_loss = (torch.cat([vid_loss_noaug-vid_loss_aug, spill_loss_noaug-spill_loss_aug, puddle_loss_noaug-puddle_loss_aug])/0.2).reshape(-1,1).sigmoid()
-            
-            vid_ix,spill_ix,puddle_ix = max_idxs
-            aug_pred_vids = torch.gather(aug_pred[:4*num_vid_patches].reshape(4,num_vid_patches,3), 1, vid_ix).squeeze()
-            aug_pred_spills = torch.gather(aug_pred[4*num_vid_patches:4*num_vid_patches + 8*num_spill_patches].reshape(8,num_spill_patches,3), 1, spill_ix).squeeze()
-            aug_pred_puddles = torch.gather(aug_pred[4*num_vid_patches + 8*num_spill_patches:4*num_vid_patches + 8*num_spill_patches + 4*num_puddle_patches].reshape(4,num_puddle_patches,3), 1, puddle_ix).squeeze()
-            aug_pred = torch.cat([aug_pred_vids,aug_pred_spills,aug_pred_puddles], dim=0)
-            
-            augnet_target = (aug_pred*delta_loss + (1-aug_pred)*(1-delta_loss)).detach()
-            augnet_loss = F.binary_cross_entropy(aug_pred,augnet_target)
-            #aug_loss = augnet_loss = 0.
-
-            final_loss = no_aug_loss + aug_loss + FLAGS.augnet_coeff*augnet_loss'''
 
             train_iter += 1
             log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
