@@ -34,7 +34,7 @@ flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
 flags.DEFINE_float('margin',0.025,'')
 flags.DEFINE_float('puddle_coeff',0.0,'')
-flags.DEFINE_float('vid_coeff',0.5,'')
+flags.DEFINE_float('vid_coeff',2.,'')
 flags.DEFINE_string('scale','xlarge','')
 
 flags.DEFINE_bool('autocontrast',True,'')
@@ -68,7 +68,7 @@ flags.DEFINE_float('min_spill_frac',0.4,'')
 flags.DEFINE_float('max_spill_frac',1.,'')
 flags.DEFINE_float('superimpose_frac',0.,'')
 
-batch_img_nums = [2+4,4,0]
+batch_img_nums = [4+8,4,0]
 
 def main(argv):
     global batch_img_nums
@@ -125,7 +125,7 @@ def main(argv):
     else:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.8,0.3,2,0.4)
+    color_aug = torchvision.transforms.ColorJitter(0.8,0.3,2,0.15)
 
     normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
@@ -178,6 +178,15 @@ def main(argv):
 
             pos_patches = img_patches[:sum(batch_img_nums)]
             neg_patches = img_patches[sum(batch_img_nums):]
+
+            patches_show = inv_normalize(pos_patches).clamp(0,1).movedim(1,3).cpu().numpy()
+            for patch_ix,patch in enumerate(patches_show):
+                cv2.imshow(str(patch_ix),patch[:,:,::-1])
+
+            key = cv2.waitKey(0)
+            if key==27:
+                cv2.destroyAllWindows()
+                exit()
 
             pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True)
             with torch.no_grad():

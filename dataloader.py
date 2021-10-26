@@ -81,11 +81,11 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
                               'gallon':[(1,1),(1,2)],'react':[(1,1),(1,2)],'drinks':[(1,1),(2,3)],'store':[(1,1),(2,3)], \
-                              'pool':[(2,1),(3,1)], 'morningside':[(2,3)]}
+                              'pool':[(2,1),(3,1)], 'morningside':[(1,2),(2,2),(2,3)]}
 
             self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
                                 'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
-                                'pool':[2,3], 'morningside':[6]}
+                                'pool':[2,3], 'morningside':[2,4,6]}
         elif FLAGS.scale == 'large':
             self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
                               'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
@@ -136,9 +136,12 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.video_groups = ['gallon','smacking_drinks','react','store1_1','store1_2','store1_3']
 
             self.morningside = glob.glob(directory+'/spill_vids/morningside/*.txt')
+            self.morningside.sort()
+            self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
+            self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
             self.morningside_no_spill = {}
             for v in self.morningside:
-                self.morningside_no_spill[v] = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+vid[64:-10]+'*')
+                self.morningside_no_spill[v] = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*')
         
         self.train = train
         if self.train:
@@ -156,6 +159,7 @@ class CustomDataGen(torch.utils.data.Dataset):
             all_images = frames
         elif dataset == 'morningside':
             frames,bboxes,cats = sampled_frames
+            all_images = frames
         elif dataset == 'val_video':
             all_images,bboxes = sampled_frames
         elif dataset == 'spill':
@@ -259,6 +263,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                     all_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
 
                     elif dataset == 'video' or dataset == 'morningside':
+                        #print(dataset,len(bboxes),i_ix)
                         frame_bboxes = all_bboxes[i_ix] if dataset=='video' else [bboxes[i_ix]]
                         for bb in frame_bboxes:
                             spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
@@ -312,7 +317,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
 
                         if dataset=='video':
-                            vid_group = vids[0] if i_ix<self.batch_nums[0]//3 else vids[1]
+                            vid_group = vids[0] if i_ix<len(all_images)/2 else vids[1]
                         elif dataset=='morningside':
                             vid_group = 'morningside'
 
@@ -331,7 +336,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 for x_ix in range(num_x):
                                     if cat==0:
                                         patch_spill_sum = spill_mask[p_h*y_ix+max(0,(p_h-p_w)//2):p_h*(y_ix+1)-max(0,(p_h-p_w)//2),p_w*x_ix+max(0,(p_w-p_h)//2):p_w*(x_ix+1)-max(0,(p_w-p_h)//2)].sum()
-                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.8*spill_pix_sum:
+                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.5*spill_pix_sum:
                                             spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                     elif cat==1 and p_count in patch_samples:
                                         sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
@@ -344,6 +349,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         if cat==0:
                             if len(spill_patches) == 0:
                                 print(spill_mask.sum(), spill_mask.shape)
+
                             all_patches.append(random.choice(spill_patches))
                 else:        
                     if dataset == 'pool':
@@ -386,6 +392,9 @@ class CustomDataGen(torch.utils.data.Dataset):
     
     def __getitem__(self, index):
         if self.train:
+            floors_sample = random.sample(self.all_floors,3)
+            self.floors = [Image.open(floor) for floor in floors_sample]
+
             cats = []
             frames = []
             bboxes = []
@@ -449,8 +458,8 @@ class CustomDataGen(torch.utils.data.Dataset):
             cats = []
             frames = []
             bboxes = []
-            for v in range(2):
-                vid = random.choice(self.morningside)
+            vids = np.random.choice(self.morningside, 2, replace=False, p=self.vid_probs)
+            for vid in vids:
                 with open(vid[:-4]+'.txt','r') as fp:
                     lines = fp.read().splitlines()
 
@@ -461,12 +470,13 @@ class CustomDataGen(torch.utils.data.Dataset):
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
                 pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//3)
-                bboxes = []
                 for fr in pos_fr_idxs:
                     frame = Image.open(vid[:-4]+'/{}.png'.format(fr))
                     frames.append(frame)
                     cats.append(0)
                     bbox = random.choice(spill_frames[fr])
+                    if (bbox[2]-bbox[0])*(bbox[3]-bbox[1]) < 100:
+                        print(vid,fr,bbox)
                     bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
 
                 neg_vid = cv2.VideoCapture(random.choice(self.morningside_no_spill[vid]))
@@ -483,8 +493,6 @@ class CustomDataGen(torch.utils.data.Dataset):
             pos_images.extend([img for img,cat in zip(imgs,cats) if cat==0])
             neg_images.extend([img for img,cat in zip(imgs,cats) if cat==1])
         
-            floors_sample = random.sample(self.all_floors,3)
-            self.floors = [Image.open(floor) for floor in floors_sample]
             for ix in range(self.batch_nums[1]):
                 imgs = self.__get_image__(index+ix, dataset='spill')
                 pos_images.append(imgs[0])

@@ -133,6 +133,3 @@ class SpillDetector(nn.Module):
             num_compose = np.random.randint(1,FLAGS.max_compose+1)
             for c in range(num_compose):
                 self.aug_set[-1].append(random.choice(self.all_augs))
-
-        print(self.all_augs)
-        print(self.aug_set)
