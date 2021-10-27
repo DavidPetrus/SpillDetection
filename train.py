@@ -21,23 +21,26 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',20,'')
+flags.DEFINE_integer('epochs',15,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
-flags.DEFINE_integer('proj_head',0,'')
+flags.DEFINE_integer('proj_head',256,'')
 flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('num_proto_sets',1,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
-flags.DEFINE_float('margin',0.025,'')
-flags.DEFINE_float('puddle_coeff',0.0,'')
+flags.DEFINE_float('margin',0.,'')
+flags.DEFINE_integer('num_puddle',0,'')
+flags.DEFINE_float('puddle_coeff',0.5,'')
 flags.DEFINE_float('vid_coeff',2.,'')
+flags.DEFINE_float('spill_coeff',1.,'')
 flags.DEFINE_string('scale','xlarge','')
 
 flags.DEFINE_bool('autocontrast',True,'')
+flags.DEFINE_integer('num_distorts',1,'')
 
 # Multiple Augmentations
 flags.DEFINE_integer('num_augs',20,'')
@@ -64,7 +67,7 @@ flags.DEFINE_bool('posterize',False,'')
 # Superimpose
 flags.DEFINE_float('min_alpha',140,'')
 flags.DEFINE_float('max_alpha',180,'')
-flags.DEFINE_float('min_spill_frac',0.4,'')
+flags.DEFINE_float('min_spill_frac',0.3,'')
 flags.DEFINE_float('max_spill_frac',1.,'')
 flags.DEFINE_float('superimpose_frac',0.,'')
 
@@ -72,6 +75,8 @@ batch_img_nums = [4+8,4,0]
 
 def main(argv):
     global batch_img_nums
+
+    batch_img_nums[2] = FLAGS.num_puddle
 
     wandb.init(project="SpillDetection",name=FLAGS.exp)
     wandb.config.update(flags.FLAGS)
@@ -110,6 +115,7 @@ def main(argv):
     if FLAGS.grayscale:
         color_distorts.append(lambda x: F_vis.rgb_to_grayscale(x,3))
         
+    FLAGS.num_distorts = len(color_distorts)
 
     training_set = CustomDataGen(TRAIN_IMAGES_PATH, batch_size, preprocess, train=True, color_distorts=color_distorts, batch_nums=batch_img_nums)
     training_generator = torch.utils.data.DataLoader(training_set, batch_size=None, shuffle=False, num_workers=FLAGS.num_workers, pin_memory=True)
@@ -125,35 +131,12 @@ def main(argv):
     else:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.8,0.3,2,0.15)
+    color_aug = torchvision.transforms.ColorJitter(0.3,0.3,0.7,0.2)
 
     normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
 
     num_distorts = len(color_distorts)
-
-    if FLAGS.scale == 'all':
-        num_vid_patches = 30*num_distorts
-        num_spill_patches = 10*num_distorts
-        num_puddle_patches = 10*num_distorts
-    elif FLAGS.scale == 'small':
-        num_vid_patches = 30*num_distorts
-        num_spill_patches = 10*num_distorts
-        num_puddle_patches = 10*num_distorts
-    elif FLAGS.scale == 'large':
-        num_vid_patches = 8*num_distorts
-        num_spill_patches = 1*num_distorts
-        num_puddle_patches = 3*num_distorts
-    elif FLAGS.scale == 'xlarge':
-        num_vid_patches = 1*num_distorts
-        num_spill_patches = 1*num_distorts
-        num_puddle_patches = 1*num_distorts
-    elif FLAGS.scale == 'med':
-        num_vid_patches = 3*num_distorts
-        num_spill_patches = 2*num_distorts
-        num_puddle_patches = 2*num_distorts
-
-    num_patches = [num_vid_patches,num_spill_patches,num_puddle_patches]
 
     lab = torch.zeros(60,dtype=torch.int64).to('cuda')
 
@@ -174,41 +157,17 @@ def main(argv):
                 img_patches = normalize(F_vis.autocontrast(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1))))
             else:
                 img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
-            #img_patches = img_patches.to('cuda')
 
-            pos_patches = img_patches[:sum(batch_img_nums)]
-            neg_patches = img_patches[sum(batch_img_nums):]
-
-            patches_show = inv_normalize(pos_patches).clamp(0,1).movedim(1,3).cpu().numpy()
-            for patch_ix,patch in enumerate(patches_show):
-                cv2.imshow(str(patch_ix),patch[:,:,::-1])
-
-            key = cv2.waitKey(0)
-            if key==27:
-                cv2.destroyAllWindows()
-                exit()
-
-            pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True)
-            with torch.no_grad():
-                neg_patches, neg_pred = spill_det.aug_pred(neg_patches)
-
-            sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))
-            pos_sims = sims[:FLAGS.num_augs*sum(batch_img_nums)].reshape(FLAGS.num_augs, sum(batch_img_nums)).movedim(0,1)
-            neg_sims = sims[FLAGS.num_augs*sum(batch_img_nums):]
-
-            augnet_loss = -torch.sum(F.log_softmax(pos_pred, dim=1) * F.softmax(-pos_sims/FLAGS.aug_temp, dim=1).detach(), dim=1).mean()
-
-            pos_sims = torch.gather(pos_sims, 1, torch.multinomial(F.softmax(pos_pred, dim=1), 1))
-            losses, accs = loss_func(torch.cat([pos_sims,neg_sims], dim=0), num_patches, lab)
+            sims = spill_det(img_patches)
+            losses, accs = loss_func(sims, lab)
 
             spill_loss,puddle_loss,vid_loss = losses
             spill_acc,puddle_acc,vid_acc = accs
 
-            final_loss = spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss + FLAGS.augnet_coeff*augnet_loss
+            final_loss = FLAGS.spill_coeff*spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
 
             train_iter += 1
             log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
-                        "AugNet Loss": augnet_loss, \
                         "Video Loss": vid_loss, "Spill Loss":spill_loss, "Puddle Loss":puddle_loss, \
                         "Video Accuracy": vid_acc, "Spill Accuracy": spill_acc, "Puddle Accuracy": puddle_acc}
 
@@ -234,10 +193,10 @@ def main(argv):
         org_loss_2x3 = org_loss_3x5 = org_loss_4x7 = loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = \
         acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
 
-        probs = 0.1 + (aug_loss_avg-aug_loss_avg.min())/(aug_loss_avg.max()-aug_loss_avg.min()+0.01)
+        '''probs = 0.1 + (aug_loss_avg-aug_loss_avg.min())/(aug_loss_avg.max()-aug_loss_avg.min()+0.01)
         probs /= probs.sum()
         aug_loss_sums = np.array([0. for i in range(FLAGS.num_augs)])
-        aug_loss_count = np.array([0 for i in range(FLAGS.num_augs)])
+        aug_loss_count = np.array([0 for i in range(FLAGS.num_augs)])'''
 
         for data in validation_generator:
             with torch.no_grad():
@@ -245,7 +204,7 @@ def main(argv):
                 if FLAGS.autocontrast:
                     img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
 
-                pos_patches = img_patches[:(10+3+4)*num_crop_dims]
+                '''pos_patches = img_patches[:(10+3+4)*num_crop_dims]
                 neg_patches = img_patches[(10+3+4)*num_crop_dims:]
 
                 aug_indices = np.random.choice(FLAGS.num_augs, size=4, replace=False, p=probs)
@@ -253,10 +212,11 @@ def main(argv):
                 pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True, val=True, five_crop=False, aug_indices=aug_indices)
                 neg_patches, neg_pred = spill_det.aug_pred(neg_patches, apply_all=True, val=True, aug_indices=aug_indices)
 
-                sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))
-                pos_sims,m_idxs = sims[:4*1*(10+3+4)*num_crop_dims].reshape(4,1,(10+3+4),num_crop_dims).max(dim=1)[0].max(dim=0)
+                sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))'''
+                sims = spill_det(img_patches)
+                pos_sims = sims[:(10+3+4)*FLAGS.num_distorts].reshape((10+3+4),FLAGS.num_distorts).max(dim=1,keepdim=True)[0]
                 #print(m_idxs)
-                neg_sims = sims[4*1*(10+3+4)*num_crop_dims*num_distorts:].reshape(4,(10+3+4),3*12,1*num_distorts).max(dim=-1)[0].max(dim=0)[0]
+                neg_sims = sims[(10+3+4)*FLAGS.num_distorts:].reshape((10+3+4),3*12,FLAGS.num_distorts).max(dim=-1)[0]
 
                 #img_patches, aug_pred = spill_det.aug_pred(img_patches, val=True)
 
@@ -274,8 +234,8 @@ def main(argv):
                 #org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
                 #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
-                aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
-                aug_loss_count[aug_indices] += 1
+                #aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
+                #aug_loss_count[aug_indices] += 1
 
                 '''# Augmented patches
                 sims = spill_det(aug_patches)
@@ -304,7 +264,7 @@ def main(argv):
 
                 val_count += 1
 
-        aug_loss_avg = aug_loss_sums/aug_loss_count
+        #aug_loss_avg = aug_loss_sums/aug_loss_count
 
         log_dict = {"Epoch":epoch}
         log_dict["Org_val_loss_2x3"] = org_loss_2x3/val_count
@@ -331,16 +291,14 @@ def main(argv):
             torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
             min_acc = sum(val_accs)
 
-def loss_func(sims, num_patches, lab):
+def loss_func(sims, lab):
     global batch_img_nums
 
-    num_vid_patches,num_spill_patches,num_puddle_patches = num_patches
-
-    pos_sims_vids = sims[:batch_img_nums[0]*num_vid_patches].reshape(batch_img_nums[0],num_vid_patches,1)
-    pos_sims_spills = sims[batch_img_nums[0]*num_vid_patches:batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches].reshape(batch_img_nums[1],num_spill_patches,1)
-    pos_sims_puddles = sims[batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches:batch_img_nums[0]*num_vid_patches + \
-                        batch_img_nums[1]*num_spill_patches + batch_img_nums[2]*num_puddle_patches].reshape(batch_img_nums[2],num_puddle_patches,1)
-    neg_sims = sims[batch_img_nums[0]*num_vid_patches + batch_img_nums[1]*num_spill_patches + batch_img_nums[2]*num_puddle_patches:].max(dim=1)[0].reshape(1,-1).tile(max(batch_img_nums),1)
+    pos_sims_vids = sims[:batch_img_nums[0]*FLAGS.num_distorts].reshape(batch_img_nums[0],FLAGS.num_distorts,1)
+    pos_sims_spills = sims[batch_img_nums[0]*FLAGS.num_distorts:(batch_img_nums[0] + batch_img_nums[1])*FLAGS.num_distorts].reshape(batch_img_nums[1],FLAGS.num_distorts,1)
+    pos_sims_puddles = sims[(batch_img_nums[0] + batch_img_nums[1])*FLAGS.num_distorts:(batch_img_nums[0] + \
+                        batch_img_nums[1] + batch_img_nums[2])*FLAGS.num_distorts].reshape(batch_img_nums[2],FLAGS.num_distorts,1)
+    neg_sims = sims[(batch_img_nums[0] + batch_img_nums[1] + batch_img_nums[2])*FLAGS.num_distorts:].max(dim=1)[0].reshape(1,-1).tile(max(batch_img_nums),1)
 
     # Compute vid loss
     p_sim,vid_ix = pos_sims_vids.max(dim=2,keepdim=True)[0].max(dim=1,keepdim=True)
