@@ -29,7 +29,11 @@ class SpillDetector(nn.Module):
                                  lambda x,y: F_vis.adjust_gamma(x,y*FLAGS.gamma_range + 1/FLAGS.gamma_range)]'''
 
         if FLAGS.proj_head > 0:
-            self.proj_head = nn.Linear(512,FLAGS.proj_head,bias=False)
+            if FLAGS.proj_hidden > 0:
+                self.proj_head = nn.Sequential(nn.Linear(512,FLAGS.proj_hidden), nn.ReLU(inplace=True), nn.Linear(FLAGS.proj_hidden,FLAGS.proj_head))
+            else:
+                self.proj_head = nn.Linear(512,FLAGS.proj_head,bias=False)
+                
             self.prototypes = nn.Parameter(torch.randn(FLAGS.num_proto_sets,self.num_prototypes, FLAGS.proj_head).to(device), requires_grad=True)
         else:
             self.prototypes = nn.Parameter(torch.randn(FLAGS.num_proto_sets,self.num_prototypes, 512).to(device), requires_grad=True)

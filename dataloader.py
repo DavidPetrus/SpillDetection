@@ -68,51 +68,15 @@ class CustomDataGen(torch.utils.data.Dataset):
         self.batch_nums = batch_nums
 
         self.preprocess = preprocess
-        if FLAGS.scale == 'all':
-            self.crop_dims = {'spill':[(1,1),(1,2),(2,2),(2,3)],'not_spill':[(2,3),(3,5),(4,7)], \
-                              'puddle':[(1,1),(1,2),(2,2),(3,1)],'not_puddle':[(1,1),(1,2),(2,2),(1,3)], \
-                              'gallon':[(1,2),(2,3),(3,5),(4,7)],'react':[(1,2),(2,3),(3,5),(4,6)],'drinks':[(2,3),(3,5),(4,7)],'store':[(2,3),(3,5),(4,7)], \
-                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
 
-            self.num_patches = {'spill':[1,2,4,3],'not_spill':[6,15,9],'puddle':[1,2,4,3],'not_puddle':[1,2,4,3], \
-                                'gallon':[2,6,12,10],'react':[2,6,15,7], 'drinks':[6,14,10],'store':[6,14,10], \
-                                'pool':[2,3],'val_vid':[6,10,14]}
-        elif FLAGS.scale == 'xlarge':
-            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
-                              'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
-                              'gallon':[(1,1),(1,2)],'react':[(1,1),(1,2)],'drinks':[(1,1),(2,3)],'store':[(1,1),(2,3)], \
-                              'pool':[(2,1),(3,1)], 'morningside':[(1,2),(2,2),(2,3)]}
+        self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+                          'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
+                          'gallon':[(1,1),(2,2)],'react':[(1,1),(2,2)],'drinks':[(1,1),(2,2)],'store':[(1,1),(2,2)], \
+                          'pool':[(2,1),(3,1)], 'morningside':[(1,2),(2,2)]}
 
-            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
-                                'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
-                                'pool':[2,3], 'morningside':[2,4,6]}
-        elif FLAGS.scale == 'large':
-            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
-                              'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
-                              'gallon':[(1,2),(2,3)],'react':[(1,2),(2,3)],'drinks':[(2,3),(3,5)],'store':[(2,3),(3,5)], \
-                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
-
-            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1,2],'not_puddle':[1,2], \
-                                'gallon':[2,6],'react':[2,6], 'drinks':[6,2],'store':[6,2], \
-                                'pool':[2,3],'val_vid':[6,10,14]}
-        elif FLAGS.scale == 'med':
-            self.crop_dims = {'spill':[(1,1),(1,2)],'not_spill':[(2,3),(3,5),(4,7)], \
-                              'puddle':[(1,1),(1,2)],'not_puddle':[(1,1),(1,2)], \
-                              'gallon':[(1,2),(2,3)],'react':[(1,2),(2,3)],'drinks':[(2,3),(3,5)],'store':[(2,3),(3,5)], \
-                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
-
-            self.num_patches = {'spill':[1,1],'not_spill':[6,15,9],'puddle':[1,1],'not_puddle':[1,2], \
-                                'gallon':[1,2],'react':[1,2], 'drinks':[1,2],'store':[1,2], \
-                                'pool':[2,3],'val_vid':[6,10,14]}
-        elif FLAGS.scale == 'small':
-            self.crop_dims = {'spill':[(1,2),(2,2),(2,3)],'not_spill':[(3,5),(4,7)], \
-                              'puddle':[(1,3),(2,2),(3,1)],'not_puddle':[(1,2),(2,2),(1,3)], \
-                              'gallon':[(3,5),(4,7)],'react':[(3,5),(4,6)],'drinks':[(3,5),(4,7)],'store':[(3,5),(4,7)], \
-                              'pool':[(2,1),(3,1)],'val_vid':[(2,3),(3,5),(4,7)]}
-
-            self.num_patches = {'spill':[2,4,4],'not_spill':[15,15],'puddle':[3,4,3],'not_puddle':[2,4,3], \
-                                'gallon':[15,15],'react':[15,15], 'drinks':[15,15],'store':[15,15], \
-                                'pool':[2,3],'val_vid':[6,10,14]}
+        self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
+                            'gallon':[1,4],'react':[1,4], 'drinks':[1,4],'store':[1,4], \
+                            'pool':[2,3], 'morningside':[1,4]}
 
         if not train:
             self.pool_spills = glob.glob(directory+'/pool_spills/*')
@@ -138,6 +102,8 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.morningside = glob.glob(directory+'/spill_vids/morningside/*.txt')
             self.morningside.sort()
             self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
+            self.yt_vid_num_spills = [3,2,1,2,3,2,1,1,2,1,1,2,2,3,2,1,2,2,1,1,1,1,2,1,1,1,1,2,4,1,1,1,1,1,1,1]
+            self.yt_probs = [n/sum(self.yt_vid_num_spills) for n in self.yt_vid_num_spills]
             self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
             self.morningside_no_spill = {}
             for v in self.morningside:
@@ -273,41 +239,42 @@ class CustomDataGen(torch.utils.data.Dataset):
                         lux,luy,rbx,rby = bbox
                         bb_w = rbx-lux
                         bb_h = rby-luy
-                        cr_l = np.random.randint(0,lux+1)
-                        cr_t = np.random.randint(0,luy+1)
-                        cr_r = np.random.randint(rbx,img_w)
-                        cr_b = np.random.randint(rby,img_h)
-                        
-                        crop_size = min(cr_r-cr_l,cr_b-cr_t)
-                        if crop_size < bb_w:
-                            crop_size = cr_r-cr_l
-                            if luy > img_h-1-rby:
-                                cr_t = max(cr_b-crop_size,0)
-                            else:
-                                cr_b = min(cr_t+crop_size,img_h-1)
-                            crop_size = min(cr_r-cr_l,cr_b-cr_t)
-                        elif crop_size < bb_h:
-                            crop_size = cr_b-cr_t
-                            if lux > img_w-1-rbx:
-                                cr_l = max(cr_r-crop_size,0)
-                            else:
-                                cr_r = min(cr_l+crop_size,img_w-1)
-                            crop_size = min(cr_r-cr_l,cr_b-cr_t)
+                        cc = 0
+                        while True:
+                            if FLAGS.scale == 'full':
+                                cr_l = np.random.randint(0,lux+1)
+                                cr_t = np.random.randint(0,luy+1)
+                                cr_r = rbx + np.random.randint(0,img_w-rbx)
+                                cr_b = rby + np.random.randint(0,img_h-rby)
+                            elif FLAGS.scale == 'large':
+                                cr_l = np.random.randint(0,3*lux//4 + 1)
+                                cr_t = np.random.randint(0,3*luy//4 + 1)
+                                cr_r = rbx + np.random.randint((img_w-rbx)//4,img_w-rbx + 1)
+                                cr_b = rby + np.random.randint((img_h-rby)//4,img_h-rby + 1)
+                            elif FLAGS.scale == 'small':
+                                cr_l = np.random.randint(lux//2,lux + 1)
+                                cr_t = np.random.randint(luy//2,luy + 1)
+                                cr_r = rbx + np.random.randint(0,(img_w-rbx)//2 + 1)
+                                cr_b = rby + np.random.randint(0,(img_h-rby)//2 + 1)
 
-                        if cr_r-cr_l > crop_size:
-                            if lux < img_w-1-rbx:
-                                cr_l = np.random.randint(max(0,rbx-crop_size),min(lux+1,img_w-crop_size))
-                                cr_r = cr_l+crop_size
+                            cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
+                            if cr_w > cr_h and cr_w < min(img_w,img_h):
+                                if cr_t+cr_w < img_h:
+                                    cr_b = cr_t+cr_w
+                                else:
+                                    cr_t = cr_b-cr_w
                             else:
-                                cr_r = np.random.randint(max(rbx,crop_size),min(img_w,lux+crop_size+1))
-                                cr_l = cr_r-crop_size
-                        elif cr_b-cr_t > crop_size:
-                            if luy < img_h-1-rby:
-                                cr_t = np.random.randint(max(0,rby-crop_size),min(luy+1,img_h-crop_size))
-                                cr_b = cr_t+crop_size
+                                if cr_l+cr_h < img_w:
+                                    cr_r = cr_l+cr_h
+                                else:
+                                    cr_l = cr_r-cr_h
+
+                            if cr_t < 0 or cr_l < 0 or cr_b > img_h or cr_r > img_w:
+                                cc += 1
+                                if cc > 20:
+                                    print("!!!!!!!!!!!!!!!!!!!!!!!!!",cc)
                             else:
-                                cr_b = np.random.randint(max(rby,crop_size),min(img_h,luy+crop_size+1))
-                                cr_t = cr_b-crop_size
+                                break
 
                         crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
                         spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
@@ -336,7 +303,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 for x_ix in range(num_x):
                                     if cat==0:
                                         patch_spill_sum = spill_mask[p_h*y_ix+max(0,(p_h-p_w)//2):p_h*(y_ix+1)-max(0,(p_h-p_w)//2),p_w*x_ix+max(0,(p_w-p_h)//2):p_w*(x_ix+1)-max(0,(p_w-p_h)//2)].sum()
-                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.8*spill_pix_sum:
+                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.6*spill_pix_sum:
                                             spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                     elif cat==1 and p_count in patch_samples:
                                         sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
@@ -363,27 +330,27 @@ class CustomDataGen(torch.utils.data.Dataset):
                                     all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
                     else:
                         has_spill = True if i_ix < len(bboxes) else False
-                        val_crop_x = [(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)]
-                        val_crop_y = [(0.,0.5),(0.25,0.75),(0.5,1.)]
-
-                        if has_spill:
-                            bb = bboxes[i_ix]
-                            spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
-                            max_iou = 0.
-                            for y_dim in val_crop_y:
-                                for x_dim in val_crop_x:
-                                    patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
-                                    iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
-                                    if iou > max_iou:
-                                        max_iou = iou
-                                        spill_patch = img.crop(patch_bbox)
-                            
-                            all_patches.append(self.preprocess(spill_patch))
-                        else:
-                            for y_dim in val_crop_y:
-                                for x_dim in val_crop_x:
-                                    patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
-                                    all_patches.append(self.preprocess(img.crop(patch_bbox)))
+                        x_crops = [[(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)],[(0.,0.2),(0.1,0.3),(0.2,0.4),(0.3,0.5),(0.4,0.6),(0.5,0.7),(0.6,0.8),(0.7,0.9),(0.8,1.)]]
+                        y_crops = [[(0.,0.5),(0.25,0.75),(0.5,1.)],[(0.,0.33),(0.17,0.5),(0.33,0.66),(0.5,0.83),(0.66,1.)]]
+                        for val_crop_x,val_crop_y in zip(x_crops,y_crops):
+                            if has_spill:
+                                bb = bboxes[i_ix]
+                                spill_mask[max(bb[1],0):min(bb[3],img_h),max(bb[0],0):min(bb[2],img_w)] = 1.
+                                max_iou = 0.
+                                for y_dim in val_crop_y:
+                                    for x_dim in val_crop_x:
+                                        patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
+                                        iou = spill_mask[patch_bbox[1]:patch_bbox[3],patch_bbox[0]:patch_bbox[2]].mean()
+                                        if iou > max_iou:
+                                            max_iou = iou
+                                            spill_patch = img.crop(patch_bbox)
+                                
+                                all_patches.append(self.preprocess(spill_patch))
+                            else:
+                                for y_dim in val_crop_y:
+                                    for x_dim in val_crop_x:
+                                        patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
+                                        all_patches.append(self.preprocess(img.crop(patch_bbox)))
 
             imgs.append(torch.stack(all_patches))
 
@@ -402,8 +369,8 @@ class CustomDataGen(torch.utils.data.Dataset):
             bboxes = []
             all_bboxes = []
             vids = []
-            for v in range(2):
-                vid = self.videos[np.random.randint(len(self.videos))]
+            vids_sample = np.random.choice(self.videos, 2, replace=False, p=self.yt_probs)
+            for vid in vids_sample:
                 for vid_group in ['gallon','drinks','react','store','pool']:
                     if vid_group in vid:
                         vids.append(vid_group)
@@ -422,7 +389,12 @@ class CustomDataGen(torch.utils.data.Dataset):
                         fr,lab,lux,luy,rbx,rby = line.split(' ')
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
-                neg_fr_idxs = random.sample(no_spill_frames,self.batch_nums[0]//6)
+                if len(no_spill_frames) < self.batch_nums[0]//6:
+                    neg_fr_idxs = []
+                    neg_frames =  glob.glob('/home/petrus/SpillDetection/images/train/spill_vids/neg_frames/*.png')
+                else:
+                    neg_fr_idxs = random.sample(no_spill_frames,self.batch_nums[0]//6)
+
                 pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//6)
                 pos_bboxes = []
                 for fr in pos_fr_idxs:
@@ -435,15 +407,20 @@ class CustomDataGen(torch.utils.data.Dataset):
                         all_bboxes.append(spill_frames[count])
                         bbox = random.choice(spill_frames[count])
                         cats.append(0)
-                    elif count in neg_fr_idxs:
-                        if len(pos_bboxes)==0:
+                    elif count in neg_fr_idxs or len(neg_fr_idxs)<self.batch_nums[0]//6:
+                        if len(neg_fr_idxs)<self.batch_nums[0]//6:
+                            frame_name = random.choice(neg_frames)
+                        
+                        if len(pos_bboxes)==0 or len(neg_fr_idxs)<self.batch_nums[0]//6:
                             frame = Image.open(frame_name)
                             lux = np.random.randint(frame.size[0]-100)
                             luy = np.random.randint(frame.size[1]-100)
                             s = np.random.randint(100)
                             bbox = (lux,luy,lux+s,luy+s)
+                            neg_fr_idxs.append(frame_name)
                         else:
                             bbox = random.choice(pos_bboxes)
+
                         all_bboxes.append([])
                         cats.append(1)
                     else:
@@ -499,8 +476,6 @@ class CustomDataGen(torch.utils.data.Dataset):
                 imgs = self.__get_image__(index+ix, dataset='spill')
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
-                if FLAGS.scale == 'large':
-                    neg_images.append(imgs[2])
 
             for ix in range(self.batch_nums[2]):
                 imgs = self.__get_image__(index+ix, dataset='puddle')
