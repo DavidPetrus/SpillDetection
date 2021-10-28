@@ -132,7 +132,7 @@ def main(argv):
     else:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.3,0.3,0.7,0.2)
+    color_aug = torchvision.transforms.ColorJitter(0.3,0.3,0.6,0.2)
 
     normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
@@ -158,6 +158,25 @@ def main(argv):
                 img_patches = normalize(F_vis.autocontrast(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1))))
             else:
                 img_patches = normalize(color_aug(inv_normalize(img_patches.to('cuda')).clamp(0,1)))
+
+            '''patches_show = inv_normalize(img_patches).clamp(0,1).movedim(1,3).cpu().numpy()
+            for p_ix,patch in enumerate(patches_show[:batch_img_nums[0]]):
+                cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
+
+            for p_ix,patch in enumerate(patches_show[batch_img_nums[0]:batch_img_nums[0]+batch_img_nums[1]]):
+                cv2.imshow("Spill"+str(p_ix),patch[:,:,::-1])
+
+            for p_ix,patch in enumerate(patches_show[batch_img_nums[0]+batch_img_nums[1]:batch_img_nums[0]+batch_img_nums[1]+batch_img_nums[2]]):
+                cv2.imshow("Puddle"+str(p_ix),patch[:,:,::-1])'''
+
+            '''for p_ix,patch in enumerate(patches_show[sum(batch_img_nums):]):
+                if p_ix % 3 > 0 or p_ix > 50: continue
+                cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
+
+            key = cv2.waitKey(0)
+            if key==27:
+                cv2.destroyAllWindows()
+                exit()'''
 
             sims = spill_det(img_patches)
             losses, accs = loss_func(sims, lab)
@@ -204,6 +223,25 @@ def main(argv):
                 img_patches = data.to('cuda')
                 if FLAGS.autocontrast:
                     img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
+
+                '''patches_show = inv_normalize(img_patches).clamp(0,1).movedim(1,3).cpu().numpy()
+                for p_ix,patch in enumerate(patches_show[:10*num_crop_dims]):
+                    cv2.imshow("Clear"+str(p_ix),patch[:,:,::-1])
+
+                for p_ix,patch in enumerate(patches_show[10*num_crop_dims:(10+3)*num_crop_dims]):
+                    cv2.imshow("Dark"+str(p_ix),patch[:,:,::-1])
+
+                for p_ix,patch in enumerate(patches_show[(10+3)*num_crop_dims:(10+3+4)*num_crop_dims]):
+                    cv2.imshow("Opaque"+str(p_ix),patch[:,:,::-1])
+
+                for p_ix,patch in enumerate(patches_show[sum(batch_img_nums):]):
+                    if p_ix % 3 > 0 or p_ix > 50: continue
+                    cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
+
+                key = cv2.waitKey(0)
+                if key==27:
+                    cv2.destroyAllWindows()
+                    exit()'''
 
                 '''pos_patches = img_patches[:(10+3+4)*num_crop_dims]
                 neg_patches = img_patches[(10+3+4)*num_crop_dims:]

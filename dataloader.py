@@ -69,14 +69,24 @@ class CustomDataGen(torch.utils.data.Dataset):
 
         self.preprocess = preprocess
 
-        self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
-                          'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
-                          'gallon':[(1,1),(2,2)],'react':[(1,1),(2,2)],'drinks':[(1,1),(2,2)],'store':[(1,1),(2,2)], \
-                          'pool':[(2,1),(3,1)], 'morningside':[(1,2),(2,2)]}
+        if FLAGS.scale == 'small':
+            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+                              'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
+                              'yt_vids':[(2,2)], \
+                              'pool':[(2,1),(3,1)], 'morningside':[(1,1),(2,2)]}
 
-        self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
-                            'gallon':[1,4],'react':[1,4], 'drinks':[1,4],'store':[1,4], \
-                            'pool':[2,3], 'morningside':[1,4]}
+            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
+                                'yt_vids':[4], \
+                                'pool':[2,3], 'morningside':[1,4]}
+        elif FLAGS.scale == 'large':
+            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+                              'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
+                              'yt_vids':[(1,1),(2,2)], \
+                              'pool':[(2,1),(3,1)], 'morningside':[(2,2)]}
+
+            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
+                                'yt_vids':[1,4], \
+                                'pool':[2,3], 'morningside':[4]}
 
         if not train:
             self.pool_spills = glob.glob(directory+'/pool_spills/*')
@@ -97,12 +107,13 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.num_spill_samples = 30
 
             self.videos = glob.glob(directory+'/spill_vids/*.mp4') + glob.glob(directory+'/spill_vids/*.avi')
+            self.videos.sort()
             self.video_groups = ['gallon','smacking_drinks','react','store1_1','store1_2','store1_3']
 
             self.morningside = glob.glob(directory+'/spill_vids/morningside/*.txt')
             self.morningside.sort()
             self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
-            self.yt_vid_num_spills = [3,2,1,2,3,2,1,1,2,1,1,2,2,3,2,1,2,2,1,1,1,1,2,1,1,1,1,2,4,1,1,1,1,1,1,1]
+            self.yt_vid_num_spills = [3,1,1,2,2,3,2,1,2,2,2,1,2,3,2,1,1,2,1,2,1,1,1,2,1,1,1,1,4,1,1,1,1,1,1,1]
             self.yt_probs = [n/sum(self.yt_vid_num_spills) for n in self.yt_vid_num_spills]
             self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
             self.morningside_no_spill = {}
@@ -239,52 +250,40 @@ class CustomDataGen(torch.utils.data.Dataset):
                         lux,luy,rbx,rby = bbox
                         bb_w = rbx-lux
                         bb_h = rby-luy
-                        cc = 0
-                        while True:
-                            if FLAGS.scale == 'full':
-                                cr_l = np.random.randint(0,lux+1)
-                                cr_t = np.random.randint(0,luy+1)
-                                cr_r = rbx + np.random.randint(0,img_w-rbx)
-                                cr_b = rby + np.random.randint(0,img_h-rby)
-                            elif FLAGS.scale == 'large':
-                                cr_l = np.random.randint(0,3*lux//4 + 1)
-                                cr_t = np.random.randint(0,3*luy//4 + 1)
-                                cr_r = rbx + np.random.randint((img_w-rbx)//4,img_w-rbx + 1)
-                                cr_b = rby + np.random.randint((img_h-rby)//4,img_h-rby + 1)
-                            elif FLAGS.scale == 'small':
-                                cr_l = np.random.randint(lux//2,lux + 1)
-                                cr_t = np.random.randint(luy//2,luy + 1)
-                                cr_r = rbx + np.random.randint(0,(img_w-rbx)//2 + 1)
-                                cr_b = rby + np.random.randint(0,(img_h-rby)//2 + 1)
+                        bb_size = max(bb_w,bb_h)
+                        img_size = min(img_w,img_h)
+                        if bb_size > img_size:
+                            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                            print(dataset,bbox,cat,img_w,img_h)
 
-                            cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
-                            if cr_w > cr_h and cr_w < min(img_w,img_h):
-                                if cr_t+cr_w < img_h:
-                                    cr_b = cr_t+cr_w
-                                else:
-                                    cr_t = cr_b-cr_w
-                            else:
-                                if cr_l+cr_h < img_w:
-                                    cr_r = cr_l+cr_h
-                                else:
-                                    cr_l = cr_r-cr_h
+                        if dataset=='video' or FLAGS.scale == 'large':
+                            crop_size = np.random.randint(max(bb_size,int(0.6*img_size)),img_size+1)
+                        elif FLAGS.scale == 'full':
+                            crop_size = np.random.randint(max(bb_size,int(0.3*img_size)),img_size+1)
+                        elif FLAGS.scale == 'small':
+                            crop_size = np.random.randint(max(bb_size,int(0.3*img_size)),max(bb_size,int(0.5*img_size))+1)
 
-                            if cr_t < 0 or cr_l < 0 or cr_b > img_h or cr_r > img_w:
-                                cc += 1
-                                if cc > 20:
-                                    print("!!!!!!!!!!!!!!!!!!!!!!!!!",cc)
-                            else:
-                                break
+                        if lux < img_w-rbx:
+                            cr_l = np.random.randint(max(rbx-crop_size,0),lux+1)
+                            cr_r = cr_l+crop_size
+                        else:
+                            cr_r = np.random.randint(rbx,min(lux+crop_size+1,img_w))
+                            cr_l = cr_r-crop_size
 
-                        crop_dim = np.array([cr_l,cr_t,cr_r,cr_b])
-                        spill_mask = spill_mask[crop_dim[1]:crop_dim[3],crop_dim[0]:crop_dim[2]]
+                        if luy < img_h-rby:
+                            cr_t = np.random.randint(max(rby-crop_size,0),luy+1)
+                            cr_b = cr_t+crop_size
+                        else:
+                            cr_b = np.random.randint(rby,min(luy+crop_size+1,img_h))
+                            cr_t = cr_b-crop_size
+
+                        spill_mask = spill_mask[max(cr_t,0):cr_b,max(cr_l,0):cr_r]
                         spill_pix_sum = spill_mask.sum()
-
                         crop = img.crop((cr_l,cr_t,cr_r,cr_b))
                         cr_w,cr_h = cr_r-cr_l, cr_b-cr_t
 
                         if dataset=='video':
-                            vid_group = vids[0] if i_ix<len(all_images)/2 else vids[1]
+                            vid_group = 'yt_vids'
                         elif dataset=='morningside':
                             vid_group = 'morningside'
 
@@ -292,9 +291,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                         crop_dims = self.crop_dims[vid_group]
                         num_patches = self.num_patches[vid_group]
                         for num_p,cr_dim in zip(num_patches,crop_dims):
-                            min_dim,max_dim = cr_dim
-                            num_x = min_dim if cr_h > cr_w else max_dim
-                            num_y = max_dim if cr_h > cr_w else min_dim
+                            num_x = cr_dim[0]
+                            num_y = cr_dim[1]
                             p_w,p_h = cr_w//num_x, cr_h//num_y
                             patch_samples = np.random.choice(num_x*num_y,num_p,replace=False)
                             sampled_patches = []
@@ -303,7 +301,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 for x_ix in range(num_x):
                                     if cat==0:
                                         patch_spill_sum = spill_mask[p_h*y_ix+max(0,(p_h-p_w)//2):p_h*(y_ix+1)-max(0,(p_h-p_w)//2),p_w*x_ix+max(0,(p_w-p_h)//2):p_w*(x_ix+1)-max(0,(p_w-p_h)//2)].sum()
-                                        if patch_spill_sum > 3000 or patch_spill_sum > 0.6*spill_pix_sum:
+                                        if patch_spill_sum > 0.7*spill_pix_sum or (dataset=='video' and patch_spill_sum > 0.25*spill_pix_sum):
                                             spill_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
                                     elif cat==1 and p_count in patch_samples:
                                         sampled_patches.append(self.random_flip(self.preprocess(crop.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1))))))
@@ -314,10 +312,23 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 all_patches.extend(sampled_patches)
 
                         if cat==0:
-                            if len(spill_patches) == 0:
-                                patch_spill_sum = spill_mask[max(0,(cr_h-cr_w)//2):cr_h-max(0,(cr_h-cr_w)//2),max(0,(cr_w-cr_h)//2):cr_w-max(0,(cr_w-cr_h)//2)].sum()
-                                #print(spill_mask.sum(), patch_spill_sum, spill_mask.shape)
-                                spill_patches.append(self.random_flip(self.preprocess(crop)))
+                            if len(spill_patches) == 0 and FLAGS.scale=='large':
+                                crop_size = np.random.randint(max(bb_size,int(0.3*img_size)),max(bb_size,int(0.5*img_size))+1)
+                                if lux < img_w-rbx:
+                                    cr_l = np.random.randint(max(rbx-crop_size,0),lux+1)
+                                    cr_r = cr_l+crop_size
+                                else:
+                                    cr_r = np.random.randint(rbx,min(lux+crop_size+1,img_w))
+                                    cr_l = cr_r-crop_size
+
+                                if luy < img_h-rby:
+                                    cr_t = np.random.randint(max(rby-crop_size,0),luy+1)
+                                    cr_b = cr_t+crop_size
+                                else:
+                                    cr_b = np.random.randint(rby,min(luy+crop_size+1,img_h))
+                                    cr_t = cr_b-crop_size
+
+                                spill_patches.append(self.random_flip(self.preprocess(img.crop((cr_l,cr_t,cr_r,cr_b)))))
 
                             all_patches.append(random.choice(spill_patches))
                 else:        
@@ -407,6 +418,8 @@ class CustomDataGen(torch.utils.data.Dataset):
                         all_bboxes.append(spill_frames[count])
                         bbox = random.choice(spill_frames[count])
                         cats.append(0)
+                        if bbox[0] == 133 and bbox[2] == 939:
+                            print("!!!!!!!!",frame_name)
                     elif count in neg_fr_idxs or len(neg_fr_idxs)<self.batch_nums[0]//6:
                         if len(neg_fr_idxs)<self.batch_nums[0]//6:
                             frame_name = random.choice(neg_frames)
