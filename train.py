@@ -21,27 +21,28 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',20,'')
+flags.DEFINE_integer('epochs',30,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
-flags.DEFINE_integer('proj_hidden',0,'')
-flags.DEFINE_integer('proj_head',128,'')
+flags.DEFINE_integer('proj_hidden',512,'')
+flags.DEFINE_integer('proj_head',256,'')
 flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('num_proto_sets',1,'')
 flags.DEFINE_integer('top_k_spill',1,'')
 flags.DEFINE_integer('top_k_vids',1,'')
-flags.DEFINE_float('margin',0.,'')
+flags.DEFINE_float('margin',0.07,'')
 flags.DEFINE_integer('num_puddle',2,'')
 flags.DEFINE_float('puddle_coeff',0.5,'')
 flags.DEFINE_float('vid_coeff',2.,'')
 flags.DEFINE_float('spill_coeff',0.5,'')
-flags.DEFINE_string('scale','full','full,large,small')
+flags.DEFINE_string('scale','large','full,large,small')
 
 flags.DEFINE_bool('autocontrast',True,'')
 flags.DEFINE_integer('num_distorts',1,'')
+flags.DEFINE_integer('num_crop_dims',1,'')
 
 # Multiple Augmentations
 flags.DEFINE_integer('num_augs',20,'')
@@ -128,9 +129,9 @@ def main(argv):
 
     #spill_det.load_state_dict(torch.load('weights/20Sep3.pt',map_location=torch.device('cuda')))
     if FLAGS.proj_head > 0:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters())+list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters()),'lr':0.001}], lr=FLAGS.lr)
     else:
-        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.aug_net.parameters()),'lr':0.001}], lr=FLAGS.lr)
+        optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr}], lr=FLAGS.lr)
 
     color_aug = torchvision.transforms.ColorJitter(0.3,0.3,0.6,0.2)
 
@@ -167,9 +168,9 @@ def main(argv):
                 cv2.imshow("Spill"+str(p_ix),patch[:,:,::-1])
 
             for p_ix,patch in enumerate(patches_show[batch_img_nums[0]+batch_img_nums[1]:batch_img_nums[0]+batch_img_nums[1]+batch_img_nums[2]]):
-                cv2.imshow("Puddle"+str(p_ix),patch[:,:,::-1])'''
+                cv2.imshow("Puddle"+str(p_ix),patch[:,:,::-1])
 
-            '''for p_ix,patch in enumerate(patches_show[sum(batch_img_nums):]):
+            for p_ix,patch in enumerate(patches_show[sum(batch_img_nums):]):
                 if p_ix % 3 > 0 or p_ix > 50: continue
                 cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
 
@@ -209,7 +210,12 @@ def main(argv):
                     g['lr'] = 0.001
 
         val_count = 0
-        num_crop_dims = 2
+        num_crop_dims = FLAGS.num_crop_dims
+        if FLAGS.num_crop_dims == 1:
+            num_neg = 12
+        else:
+            num_neg = 45
+
         org_loss_2x3 = org_loss_3x5 = org_loss_4x7 = loss_2x3 = loss_3x5 = loss_4x7 = acc_clear_2x3 = acc_clear_3x5 = acc_clear_4x7 = \
         acc_dark_2x3 = acc_dark_3x5 = acc_dark_4x7 = acc_opaque_2x3 = acc_opaque_3x5 = acc_opaque_4x7 = 0.
 
@@ -225,6 +231,7 @@ def main(argv):
                     img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
 
                 '''patches_show = inv_normalize(img_patches).clamp(0,1).movedim(1,3).cpu().numpy()
+                neg_patches = patches_show[(10+3+4)*num_crop_dims:]
                 for p_ix,patch in enumerate(patches_show[:10*num_crop_dims]):
                     cv2.imshow("Clear"+str(p_ix),patch[:,:,::-1])
 
@@ -234,9 +241,17 @@ def main(argv):
                 for p_ix,patch in enumerate(patches_show[(10+3)*num_crop_dims:(10+3+4)*num_crop_dims]):
                     cv2.imshow("Opaque"+str(p_ix),patch[:,:,::-1])
 
-                for p_ix,patch in enumerate(patches_show[sum(batch_img_nums):]):
-                    if p_ix % 3 > 0 or p_ix > 50: continue
-                    cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
+                for p_ix,patch in enumerate(neg_patches[:36*4]):
+                    if p_ix % 10 > 0: continue
+                    cv2.imshow("Clear"+str(p_ix),patch[:,:,::-1])
+
+                for p_ix,patch in enumerate(neg_patches[36*10:36*(10+3)]):
+                    if p_ix % 10 > 0: continue
+                    cv2.imshow("Dark"+str(p_ix),patch[:,:,::-1])
+
+                for p_ix,patch in enumerate(neg_patches[36*(10+3):36*(10+3+4)]):
+                    if p_ix % 10 > 0: continue
+                    cv2.imshow("Opaque"+str(p_ix),patch[:,:,::-1])
 
                 key = cv2.waitKey(0)
                 if key==27:
@@ -254,7 +269,7 @@ def main(argv):
                 sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))'''
                 sims = spill_det(img_patches)
                 pos_sims = sims[:(10+3+4)*FLAGS.num_distorts*num_crop_dims].reshape((10+3+4),FLAGS.num_distorts,num_crop_dims).max(dim=1)[0]
-                neg_sims = sims[(10+3+4)*FLAGS.num_distorts*num_crop_dims:].reshape((10+3+4),3,FLAGS.num_distorts,12+45).max(dim=2)[0]
+                neg_sims = sims[(10+3+4)*FLAGS.num_distorts*num_crop_dims:].reshape((10+3+4),3,FLAGS.num_distorts,num_neg).max(dim=2)[0]
 
                 #img_patches, aug_pred = spill_det.aug_pred(img_patches, val=True)
 
@@ -264,11 +279,13 @@ def main(argv):
                 #neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
 
                 sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:,:12].reshape(-1,3*12)],dim=1)
-                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,:,12:12+45].reshape(-1,3*45)],dim=1)
+                if FLAGS.num_crop_dims > 1:
+                    sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,:,12:12+45].reshape(-1,3*45)],dim=1)
                 #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
 
                 org_loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+4])
-                org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+4])
+                if FLAGS.num_crop_dims > 1:
+                    org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+4])
                 #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
                 #aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
@@ -288,15 +305,18 @@ def main(argv):
                 #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])'''
 
                 acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
-                acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
+                if FLAGS.num_crop_dims > 1:
+                    acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
                 #acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
                 acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
-                acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
+                if FLAGS.num_crop_dims > 1:
+                    acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
                 #acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
 
                 acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+4],dim=1)==0).float().mean()
-                acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+4],dim=1)==0).float().mean()
+                if FLAGS.num_crop_dims > 1:
+                    acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+4],dim=1)==0).float().mean()
                 #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
 
                 val_count += 1
@@ -325,7 +345,11 @@ def main(argv):
         val_accs = [acc_clear_2x3,acc_dark_2x3,acc_opaque_2x3]
 
         if sum(val_accs) > min_acc:
-            torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
+            if FLAGS.proj_head > 0:
+                torch.save({'prototypes': spill_det.prototypes, 'proj_head': spill_det.proj_head},'weights/{}.pt'.format(FLAGS.exp))
+            else:
+                torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
+
             min_acc = sum(val_accs)
 
 def loss_func(sims, lab):

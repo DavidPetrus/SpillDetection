@@ -78,13 +78,13 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
                                 'yt_vids':[4], \
                                 'pool':[2,3], 'morningside':[1,4]}
-        elif FLAGS.scale == 'large':
-            self.crop_dims = {'spill':[(1,1)],'not_spill':[(2,3),(3,5)], \
+        elif FLAGS.scale != 'small':
+            self.crop_dims = {'spill':[(1,1)],'not_spill':[(1,1),(2,2),(2,3),(3,5)], \
                               'puddle':[(1,1)],'not_puddle':[(1,1),(1,2)], \
                               'yt_vids':[(1,1),(2,2)], \
                               'pool':[(2,1),(3,1)], 'morningside':[(2,2)]}
 
-            self.num_patches = {'spill':[1],'not_spill':[6,15],'puddle':[1],'not_puddle':[1,2], \
+            self.num_patches = {'spill':[1],'not_spill':[1,4,6,15],'puddle':[1],'not_puddle':[1,2], \
                                 'yt_vids':[1,4], \
                                 'pool':[2,3], 'morningside':[4]}
 
@@ -117,9 +117,22 @@ class CustomDataGen(torch.utils.data.Dataset):
             self.yt_probs = [n/sum(self.yt_vid_num_spills) for n in self.yt_vid_num_spills]
             self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
             self.morningside_no_spill = {}
+            self.morningside_no_spill_bboxes = {}
+            lux,luy,rbx,rby = 100,100,200,200
             for v in self.morningside:
-                self.morningside_no_spill[v] = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*')
-        
+                self.morningside_no_spill[v] = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*.mp4')
+                self.morningside_no_spill_bboxes[v] = defaultdict(list)
+                for ann in glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*.txt'):
+                    with open(ann,'r') as fp:
+                        lines = fp.read().splitlines()
+
+                    for line in lines:
+                        if 'hard_neg' in line:
+                            fr,lab,lux,luy,rbx,rby = line.split(' ')
+                            self.morningside_no_spill_bboxes[v][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
+                        else:
+                            self.morningside_no_spill_bboxes[v][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
+
         self.train = train
         if self.train:
             self.n = len(self.spill_images)*3
@@ -127,7 +140,7 @@ class CustomDataGen(torch.utils.data.Dataset):
             #self.val_samples = ['pool','large_water','small_water','large_other','small_other','spill']
             #self.num_vals = [60,30,15,30,15,20]
             self.batch_size = 1
-            self.n = 20
+            self.n = 40
         
 
     def __get_image__(self, index, dataset='', sampled_frames=None):
@@ -312,7 +325,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                                 all_patches.extend(sampled_patches)
 
                         if cat==0:
-                            if len(spill_patches) == 0 and FLAGS.scale=='large':
+                            if len(spill_patches) == 0 and FLAGS.scale!='small':
                                 crop_size = np.random.randint(max(bb_size,int(0.3*img_size)),max(bb_size,int(0.5*img_size))+1)
                                 if lux < img_w-rbx:
                                     cr_l = np.random.randint(max(rbx-crop_size,0),lux+1)
@@ -341,8 +354,13 @@ class CustomDataGen(torch.utils.data.Dataset):
                                     all_patches.append(self.preprocess(img.crop((p_w*x_ix,p_h*y_ix,p_w*(x_ix+1),p_h*(y_ix+1)))))
                     else:
                         has_spill = True if i_ix < len(bboxes) else False
-                        x_crops = [[(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)],[(0.,0.2),(0.1,0.3),(0.2,0.4),(0.3,0.5),(0.4,0.6),(0.5,0.7),(0.6,0.8),(0.7,0.9),(0.8,1.)]]
-                        y_crops = [[(0.,0.5),(0.25,0.75),(0.5,1.)],[(0.,0.33),(0.17,0.5),(0.33,0.66),(0.5,0.83),(0.66,1.)]]
+                        if FLAGS.num_crop_dims > 1:
+                            x_crops = [[(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)],[(0.,0.2),(0.1,0.3),(0.2,0.4),(0.3,0.5),(0.4,0.6),(0.5,0.7),(0.6,0.8),(0.7,0.9),(0.8,1.)]]
+                            y_crops = [[(0.,0.5),(0.25,0.75),(0.5,1.)],[(0.,0.33),(0.17,0.5),(0.33,0.66),(0.5,0.83),(0.66,1.)]]
+                        elif FLAGS.num_crop_dims == 1:
+                            x_crops = [[(0.,0.281),(0.242,0.523),(0.477,0.758),(0.719,1.)]]
+                            y_crops = [[(0.,0.5),(0.25,0.75),(0.5,1.)]]
+                    
                         for val_crop_x,val_crop_y in zip(x_crops,y_crops):
                             if has_spill:
                                 bb = bboxes[i_ix]
@@ -418,8 +436,6 @@ class CustomDataGen(torch.utils.data.Dataset):
                         all_bboxes.append(spill_frames[count])
                         bbox = random.choice(spill_frames[count])
                         cats.append(0)
-                        if bbox[0] == 133 and bbox[2] == 939:
-                            print("!!!!!!!!",frame_name)
                     elif count in neg_fr_idxs or len(neg_fr_idxs)<self.batch_nums[0]//6:
                         if len(neg_fr_idxs)<self.batch_nums[0]//6:
                             frame_name = random.choice(neg_frames)
@@ -473,13 +489,17 @@ class CustomDataGen(torch.utils.data.Dataset):
 
                 neg_vid = cv2.VideoCapture(random.choice(self.morningside_no_spill[vid]))
                 for n in range(self.batch_nums[0]//3):
-                    neg_vid.set(cv2.CAP_PROP_POS_FRAMES,random.randint(1,int(neg_vid.get(cv2.CAP_PROP_FRAME_COUNT))-1))
+                    fr_ix = random.randint(1,int(neg_vid.get(cv2.CAP_PROP_FRAME_COUNT))-1)
+                    neg_vid.set(cv2.CAP_PROP_POS_FRAMES,fr_ix)
                     _,frame = neg_vid.read()
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frame = Image.fromarray(frame)
                     frames.append(frame)
                     cats.append(1)
-                    bboxes.append(bboxes[-1])
+                    if '_fp' in vid:
+                        bboxes.append(random.choice(self.morningside_no_spill_bboxes[vid][fr_ix//50]))
+                    else:
+                        bboxes.append(bboxes[-1])
 
             imgs = self.__get_image__(index, dataset='morningside', sampled_frames=(frames,bboxes,cats))
             pos_images.extend([img for img,cat in zip(imgs,cats) if cat==0])
