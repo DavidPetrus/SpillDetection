@@ -21,7 +21,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',30,'')
+flags.DEFINE_integer('epochs',20,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
@@ -51,8 +51,8 @@ flags.DEFINE_float('aug_temp',0.05,'')
 
 # Learned Augmentation ranges
 flags.DEFINE_float('augnet_coeff',1.,'')
-flags.DEFINE_float('saturation_range',3.,'')
-flags.DEFINE_float('hue_range',0.45,'')
+flags.DEFINE_float('saturation_range',0.6,'')
+flags.DEFINE_float('hue_range',0.2,'')
 flags.DEFINE_float('gamma_range',2,'')
 
 # Color Augmentations
@@ -133,7 +133,7 @@ def main(argv):
     else:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr}], lr=FLAGS.lr)
 
-    color_aug = torchvision.transforms.ColorJitter(0.3,0.3,0.6,0.2)
+    color_aug = torchvision.transforms.ColorJitter(0.3,0.3,FLAGS.saturation_range,FLAGS.hue_range)
 
     normalize = torchvision.transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     inv_normalize = torchvision.transforms.Normalize((-0.48145466/0.26862954, -0.4578275/0.26130258, -0.40821073/0.27577711), (1/0.26862954, 1/0.26130258, 1/0.27577711))
@@ -268,8 +268,8 @@ def main(argv):
 
                 sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))'''
                 sims = spill_det(img_patches)
-                pos_sims = sims[:(10+3+4)*FLAGS.num_distorts*num_crop_dims].reshape((10+3+4),FLAGS.num_distorts,num_crop_dims).max(dim=1)[0]
-                neg_sims = sims[(10+3+4)*FLAGS.num_distorts*num_crop_dims:].reshape((10+3+4),3,FLAGS.num_distorts,num_neg).max(dim=2)[0]
+                pos_sims = sims[:(20)*FLAGS.num_distorts*num_crop_dims].reshape((20),FLAGS.num_distorts,num_crop_dims).max(dim=1)[0]
+                neg_sims = sims[(20)*FLAGS.num_distorts*num_crop_dims:].reshape((20),3,FLAGS.num_distorts,num_neg).max(dim=2)[0]
 
                 #img_patches, aug_pred = spill_det.aug_pred(img_patches, val=True)
 
@@ -283,9 +283,9 @@ def main(argv):
                     sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,:,12:12+45].reshape(-1,3*45)],dim=1)
                 #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
 
-                org_loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+4])
+                org_loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:20])
                 if FLAGS.num_crop_dims > 1:
-                    org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+4])
+                    org_loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:20])
                 #org_loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])
 
                 #aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
@@ -304,12 +304,12 @@ def main(argv):
                 loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
                 #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])'''
 
-                acc_clear_2x3 += (torch.argmax(sims_2x3[:10],dim=1)==0).float().mean()
+                acc_clear_2x3 += (torch.argmax(sims_2x3[:20],dim=1)==0).float().mean()
                 if FLAGS.num_crop_dims > 1:
-                    acc_clear_3x5 += (torch.argmax(sims_3x5[:10],dim=1)==0).float().mean()
+                    acc_clear_3x5 += (torch.argmax(sims_3x5[:20],dim=1)==0).float().mean()
                 #acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
-                acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
+                '''acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
                 if FLAGS.num_crop_dims > 1:
                     acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
                 #acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
@@ -317,7 +317,7 @@ def main(argv):
                 acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+4],dim=1)==0).float().mean()
                 if FLAGS.num_crop_dims > 1:
                     acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+4],dim=1)==0).float().mean()
-                #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()
+                #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()'''
 
                 val_count += 1
 
