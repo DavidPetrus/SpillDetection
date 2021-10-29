@@ -112,8 +112,8 @@ class CustomDataGen(torch.utils.data.Dataset):
 
             self.morningside = glob.glob(directory+'/spill_vids/morningside/*.txt')
             self.morningside.sort()
-            #self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
-            self.num_spills = [16,0,10,10,5,3,0,0,3,6,7,8,0,5,7,6,6,0,0]
+            self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
+            #self.num_spills = [16,0,10,10,5,3,0,0,3,6,7,8,0,5,7,6,6,0,0]
             self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
 
             self.morningside_no_spill = {}
@@ -483,6 +483,7 @@ class CustomDataGen(torch.utils.data.Dataset):
             cats = []
             frames = []
             bboxes = []
+            aux_frames = []
             vids = np.random.choice(self.morningside, 2, replace=False, p=self.vid_probs)
             for vid in vids:
                 with open(vid[:-4]+'.txt','r') as fp:
@@ -503,6 +504,25 @@ class CustomDataGen(torch.utils.data.Dataset):
                     if (bbox[2]-bbox[0])*(bbox[3]-bbox[1]) < 100:
                         print(vid,fr,bbox)
                     bboxes.append((max(0,bbox[0]),max(0,bbox[1]),min(frame.size[0]-1,bbox[2]),min(frame.size[1]-1,bbox[3])))
+
+                    if FLAGS.aux_coeff > 0.:
+                        lux,luy,rbx,rby = bboxes[-1]
+                        bb_size = max(rbx-lux,rby-luy)
+                        crop_size = np.random.randint(max(bb_size,int(0.1*min(frame.size))),max(bb_size,int(0.4*min(frame.size)))+1)
+
+                        cr_l1 = lux
+                        cr_r1 = cr_l1+crop_size
+                        cr_r2 = rbx
+                        cr_l2 = cr_r2-crop_size
+                        cr_t1 = luy
+                        cr_b1 = cr_t1+crop_size
+                        cr_b2 = rby
+                        cr_t2 = cr_b2-crop_size
+
+                        aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l1,cr_t1,cr_r1,cr_b1)))).unsqueeze(0))
+                        aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l1,cr_t2,cr_r1,cr_b2)))).unsqueeze(0))
+                        aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l2,cr_t1,cr_r2,cr_b1)))).unsqueeze(0))
+                        aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l2,cr_t2,cr_r2,cr_b2)))).unsqueeze(0))
 
                 neg_vid_sample = random.choice(self.morningside_no_spill[vid])
                 neg_vid = cv2.VideoCapture(neg_vid_sample)
@@ -542,7 +562,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                 pos_images.append(imgs[0])
                 neg_images.append(imgs[1])
 
-            X = torch.cat(pos_images+neg_images)
+            X = torch.cat(pos_images+neg_images+aux_frames)
             lab = torch.cat([self.ones[:len(pos_images)], self.zeros[:len(neg_images)]], dim=0)
 
             return X,lab

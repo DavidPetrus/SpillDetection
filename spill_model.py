@@ -34,12 +34,15 @@ class SpillDetector(nn.Module):
         else:
             self.prototypes = nn.Parameter(torch.randn(FLAGS.num_proto_sets,self.num_prototypes, 512).to(device), requires_grad=True)
 
-    def forward(self, x):
+    def forward(self, x, ret_embd=False):
         with torch.no_grad():
             img_features = self.clip_model.encode_image(x).to(torch.float32)
 
         if FLAGS.proj_head > 0:
             img_features = self.proj_head(img_features)
+
+        if ret_embd:
+            return img_features
 
         img_features = F.normalize(img_features).unsqueeze(0)
 

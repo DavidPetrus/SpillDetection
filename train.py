@@ -21,10 +21,11 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',20,'')
+flags.DEFINE_integer('epochs',40,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
+flags.DEFINE_float('aux_coeff',0.,'')
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
 flags.DEFINE_integer('proj_hidden',512,'')
@@ -174,22 +175,35 @@ def main(argv):
                 if p_ix % 3 > 0 or p_ix > 50: continue
                 cv2.imshow("Vid"+str(p_ix),patch[:,:,::-1])
 
+            for p_ix,patch in enumerate(patches_show[-32:]):
+                cv2.imshow("Aux"+str(p_ix),patch[:,:,::-1])
+
             key = cv2.waitKey(0)
             if key==27:
                 cv2.destroyAllWindows()
                 exit()'''
 
-            sims = spill_det(img_patches)
+            if FLAGS.aux_coeff > 0.:
+                sims = spill_det(img_patches[:-32])
+
+                feats = spill_det(img_patches[-32:], ret_embd=True)
+                feats = F.normalize(feats).reshape(8,4,-1)
+                aux_sims = feats @ feats.transpose(1,2)
+                aux_loss = (1-aux_sims).sum()
+            else:
+                sims = spill_det(img_patches)
+                aux_loss = 0.
+
             losses, accs = loss_func(sims, lab)
 
             spill_loss,puddle_loss,vid_loss = losses
             spill_acc,puddle_acc,vid_acc = accs
 
-            final_loss = FLAGS.spill_coeff*spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss
+            final_loss = FLAGS.spill_coeff*spill_loss + FLAGS.vid_coeff*vid_loss + FLAGS.puddle_coeff*puddle_loss + FLAGS.aux_coeff*aux_loss
 
             train_iter += 1
             log_dict = {"Epoch":epoch, "Train Iteration":train_iter, "Final Loss": final_loss, \
-                        "Video Loss": vid_loss, "Spill Loss":spill_loss, "Puddle Loss":puddle_loss, \
+                        "Video Loss": vid_loss, "Spill Loss":spill_loss, "Puddle Loss":puddle_loss, "Auxiliary Loss": aux_loss, \
                         "Video Accuracy": vid_acc, "Spill Accuracy": spill_acc, "Puddle Accuracy": puddle_acc}
 
             final_loss.backward()
