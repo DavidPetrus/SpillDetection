@@ -24,14 +24,14 @@ from absl import flags, app
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('clip_model','ViT-B/16','')
-flags.DEFINE_integer('proj_hidden',0,'')
-flags.DEFINE_integer('proj_head',128,'')
+flags.DEFINE_integer('proj_hidden',512,'')
+flags.DEFINE_integer('proj_head',256,'')
 flags.DEFINE_integer('num_prototypes',30,'')
 flags.DEFINE_integer('num_proto_sets',1,'')
 
 flags.DEFINE_string('model_weights','','')
-flags.DEFINE_float('potential_thresh',0.2,'')
-flags.DEFINE_float('spill_thresh',0.38,'')
+flags.DEFINE_float('potential_thresh',0.35,'')
+flags.DEFINE_float('spill_thresh',0.5,'')
 flags.DEFINE_string('video','','')
 flags.DEFINE_string('camera','','')
 
@@ -58,7 +58,7 @@ def run(input_path):
     if FLAGS.proj_head > 0:
         spill_det.proj_head = state_dict['proj_head']
 
-    skip_frames = 3
+    skip_frames = 14
 
     frame_scale = 1
 
@@ -80,7 +80,7 @@ def run(input_path):
     #t_names = []
 
     #vids = glob.glob("/home/petrus/Downloads/SpillData/morningside_clips/*")
-    vids = ["/home/petrus/Downloads/SpillData/SpillClips/"+FLAGS.video]
+    vids = ["/home/petrus/Downloads/SpillData/morningside_clips/"+FLAGS.video]
 
     for vid in vids:
         vid_file = vid.split('/')[-1]
@@ -97,6 +97,7 @@ def run(input_path):
         avg_sims = defaultdict(float)
         #floor_pix = np.load('camera_calibration/{}_floor_seg.npy'.format(FLAGS.camera))
         #exc_patches = np.load('camera_calibration/{}.npy'.format(FLAGS.camera)).tolist()
+        zoom_crops_patch = 0
 
         count = 0
         while(cap.isOpened()):
@@ -120,8 +121,11 @@ def run(input_path):
             aug_bboxes = []
             
             with torch.no_grad():
+                zoomed_patches = []
+                zoomed_bboxes = []
                 img_patches = []
                 bboxes = []
+                p_count = 0
                 for y_dim in y_crops:
                     for x_dim in x_crops:
                         patch_bbox = (int(x_dim[0]*img_w),int(y_dim[0]*img_h),int(x_dim[1]*img_w),int(y_dim[1]*img_h))
@@ -143,14 +147,33 @@ def run(input_path):
                         #for t,n in zip(color_transforms,t_names):
                         #    img_patches.append(preprocess(t(patch)))
                         #    bboxes.append((patch_bbox,n))
+                        if p_count == zoom_crops_patch:
+                            p_size = min(patch.size)
 
-                img_patches = torch.stack(img_patches).to(device)
+                            patch_bboxes = [(int(x_dim[0]*img_w - 0.2*p_size),int(y_dim[0]*img_h - 0.2*p_size),int(x_dim[1]*img_w - 0.5*p_size),int(y_dim[1]*img_h - 0.5*p_size)), \
+                                            (int(x_dim[0]*img_w + 0.5*p_size),int(y_dim[0]*img_h - 0.2*p_size),int(x_dim[1]*img_w + 0.2*p_size),int(y_dim[1]*img_h - 0.5*p_size)), \
+                                            (int(x_dim[0]*img_w - 0.2*p_size),int(y_dim[0]*img_h + 0.5*p_size),int(x_dim[1]*img_w - 0.5*p_size),int(y_dim[1]*img_h + 0.2*p_size)), \
+                                            (int(x_dim[0]*img_w + 0.5*p_size),int(y_dim[0]*img_h + 0.5*p_size),int(x_dim[1]*img_w + 0.2*p_size),int(y_dim[1]*img_h + 0.2*p_size)), \
+                                            (int(x_dim[0]*img_w + 0.15*p_size),int(y_dim[0]*img_h + 0.15*p_size),int(x_dim[1]*img_w - 0.15*p_size),int(y_dim[1]*img_h - 0.15*p_size))]
+                            
+                            for patch_bbox in patch_bboxes:
+                                patch = autocontrast(img.crop(patch_bbox))
+                                zoomed_patches.append(preprocess(patch))
+                                zoomed_bboxes.append((patch_bbox,'org'))
+
+                        p_count += 1
+
+                img_patches = torch.stack(img_patches+zoomed_patches).to(device)
                 sims = spill_det(img_patches)
 
                 max_sims,max_idxs = torch.sort(sims.max(dim=1)[0], descending=True)
+                if max_idxs[0] < sims.shape[0]-5:
+                    zoom_crops_patch = torch.argmax(sims.max(dim=1)[0][:-5])
 
                 max_sims = max_sims[:4].cpu().numpy()
                 max_idxs = max_idxs[:4].cpu().numpy()
+
+            bboxes.extend(zoomed_bboxes)
 
             frame_bbs = []
             for p_sim,p_idx in zip(max_sims,max_idxs):
@@ -182,10 +205,12 @@ def run(input_path):
                     cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
                     #cv2.putText(frame, "Possible Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,165,255), 2*frame_scale)
                     #elif max_sim > FLAGS.potential_thresh-0.02:
-                elif m_count == 0:
+                elif m_count < 2:
                     cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0,255,0), 2*frame_scale)
                     cv2.putText(frame, logits_str, (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
                     #cv2.putText(frame, "No Spill", (bbox[0]+3,bbox[1]+15*frame_scale), cv2.FONT_HERSHEY_PLAIN, frame_scale, (0,255,0), 2*frame_scale)
+
+                m_count += 1
 
                 m_count += 1
 
