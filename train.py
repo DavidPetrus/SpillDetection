@@ -74,7 +74,7 @@ flags.DEFINE_float('min_spill_frac',0.3,'')
 flags.DEFINE_float('max_spill_frac',1.,'')
 flags.DEFINE_float('superimpose_frac',0.,'')
 
-batch_img_nums = [4+8,4,0]
+batch_img_nums = [2+10,4,0]
 
 def main(argv):
     global batch_img_nums

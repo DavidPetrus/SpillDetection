@@ -112,12 +112,12 @@ class CustomDataGen(torch.utils.data.Dataset):
 
             self.morningside = glob.glob(directory+'/spill_vids/morningside/*.txt')
             self.morningside.sort()
-            self.num_spills = [16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
+            self.num_spills = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,10,6,10,10,10,16,3,10,10,5,3,4,7,3,6,7,8,7,5,7,6,6,10,7]
             #self.num_spills = [16,0,10,10,5,3,0,0,3,6,7,8,0,5,7,6,6,0,0]
             self.vid_probs = [num_spill/sum(self.num_spills) for num_spill in self.num_spills]
 
-            self.morningside_no_spill = {}
-            self.morningside_no_spill_bboxes = {}
+            for m,p in zip(self.morningside,self.vid_probs):
+                print(m,p)
 
             self.yt_vid_num_spills = [3,1,1,2,2,3,2,1,2,2,2,1,2,3,2,1,1,2,1,2,1,1,1,2,1,1,1,1,4,1,1,1,1,1,1,1]
             self.yt_probs = [n/sum(self.yt_vid_num_spills) for n in self.yt_vid_num_spills]
@@ -127,22 +127,30 @@ class CustomDataGen(torch.utils.data.Dataset):
                                     'upper_level_atm2_fp':0.275,'upper_level_escallator1_fp':0.21}
 
             lux,luy,rbx,rby = 100,100,200,200
-            for v in self.morningside:
-                self.morningside_no_spill[v] = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*.mp4')
-                self.morningside_no_spill_bboxes[v] = defaultdict(list)
-                for ann in glob.glob(directory+'/spill_vids/morningside/no_spill_videos/'+v[38:-10]+'*.txt'):
-                    with open(ann,'r') as fp:
-                        lines = fp.read().splitlines()
+            
+            self.morningside_no_spill = []
+            self.morningside_no_spill_bboxes = {}
+            dir_files = glob.glob(directory+'/spill_vids/morningside/no_spill_videos/*')
+            for file in dir_files:
+                if file[-4:] != '.txt':
+                    self.morningside_no_spill.append(file)
+                    self.morningside_no_spill_bboxes[file] = defaultdict(list)
 
-                    for line in lines:
-                        if 'hard_neg' in line:
-                            fr,lab,lux,luy,rbx,rby = line.split(' ')
-                            self.morningside_no_spill_bboxes[v][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
-                        else:
-                            self.morningside_no_spill_bboxes[v][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
+            print(self.morningside_no_spill)
 
-                    if ann[54:-4] in list(hard_neg_offset_vids.keys()):
-                        self.hard_neg_start[v] = hard_neg_offset_vids[ann[54:-4]]
+            for ann in glob.glob(directory+'/spill_vids/morningside/no_spill_videos/*.txt'):
+                with open(ann,'r') as fp:
+                    lines = fp.read().splitlines()
+
+                for line in lines:
+                    if 'hard_neg' in line:
+                        fr,lab,lux,luy,rbx,rby = line.split(' ')
+                        self.morningside_no_spill_bboxes[ann[:-4]+'.mp4'][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
+                    else:
+                        self.morningside_no_spill_bboxes[ann[:-4]+'.mp4'][int(fr[2:])//50].append((int(lux),int(luy),int(rbx),int(rby)))
+
+                if ann[54:-4] in list(hard_neg_offset_vids.keys()):
+                    self.hard_neg_start[ann[:-4]+'.mp4'] = hard_neg_offset_vids[ann[54:-4]]
 
         self.train = train
         if self.train:
@@ -435,13 +443,13 @@ class CustomDataGen(torch.utils.data.Dataset):
                         fr,lab,lux,luy,rbx,rby = line.split(' ')
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
-                if len(no_spill_frames) < self.batch_nums[0]//6:
+                if len(no_spill_frames) < self.batch_nums[0]//12:
                     neg_fr_idxs = []
                     neg_frames =  glob.glob('/home/petrus/SpillDetection/images/train/spill_vids/neg_frames/*.png')
                 else:
-                    neg_fr_idxs = random.sample(no_spill_frames,self.batch_nums[0]//6)
+                    neg_fr_idxs = random.sample(no_spill_frames,self.batch_nums[0]//12)
 
-                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//6)
+                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//12)
                 pos_bboxes = []
                 for fr in pos_fr_idxs:
                     pos_bboxes.extend(spill_frames[fr])
@@ -453,11 +461,11 @@ class CustomDataGen(torch.utils.data.Dataset):
                         all_bboxes.append(spill_frames[count])
                         bbox = random.choice(spill_frames[count])
                         cats.append(0)
-                    elif count in neg_fr_idxs or len(neg_fr_idxs)<self.batch_nums[0]//6:
-                        if len(neg_fr_idxs)<self.batch_nums[0]//6:
+                    elif count in neg_fr_idxs or len(neg_fr_idxs)<self.batch_nums[0]//12:
+                        if len(neg_fr_idxs)<self.batch_nums[0]//12:
                             frame_name = random.choice(neg_frames)
                         
-                        if len(pos_bboxes)==0 or len(neg_fr_idxs)<self.batch_nums[0]//6:
+                        if len(pos_bboxes)==0 or len(neg_fr_idxs)<self.batch_nums[0]//12:
                             frame = Image.open(frame_name)
                             lux = np.random.randint(frame.size[0]-100)
                             luy = np.random.randint(frame.size[1]-100)
@@ -484,7 +492,7 @@ class CustomDataGen(torch.utils.data.Dataset):
             frames = []
             bboxes = []
             aux_frames = []
-            vids = np.random.choice(self.morningside, 2, replace=False, p=self.vid_probs)
+            vids = np.random.choice(self.morningside, 5, replace=False, p=self.vid_probs)
             for vid in vids:
                 with open(vid[:-4]+'.txt','r') as fp:
                     lines = fp.read().splitlines()
@@ -495,7 +503,7 @@ class CustomDataGen(torch.utils.data.Dataset):
                         fr,lab,lux,luy,rbx,rby = line.split(' ')
                         spill_frames[int(fr[2:])].append((int(lux),int(luy),int(rbx),int(rby)))
 
-                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//3)
+                pos_fr_idxs = random.sample(list(spill_frames.keys()),self.batch_nums[0]//6)
                 for fr in pos_fr_idxs:
                     frame = Image.open(vid[:-4]+'/{}.png'.format(fr))
                     frames.append(frame)
@@ -524,29 +532,35 @@ class CustomDataGen(torch.utils.data.Dataset):
                         aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l2,cr_t1,cr_r2,cr_b1)))).unsqueeze(0))
                         aux_frames.append(self.random_flip(self.preprocess(frame.crop((cr_l2,cr_t2,cr_r2,cr_b2)))).unsqueeze(0))
 
-                neg_vid_sample = random.choice(self.morningside_no_spill[vid])
+                neg_vid_sample = random.choice(self.morningside_no_spill)
                 neg_vid = cv2.VideoCapture(neg_vid_sample)
                 num_frames = neg_vid.get(cv2.CAP_PROP_FRAME_COUNT)
                 if '_fp' in neg_vid_sample:
-                    offset = int(self.hard_neg_start[vid]*num_frames)
+                    offset = int(self.hard_neg_start[neg_vid_sample[:-4]+'.mp4']*num_frames)
                 else:
                     offset = 0
 
-                for n in range(self.batch_nums[0]//3):
+                for n in range(self.batch_nums[0]//6):
                     fr_ix = random.randint(1+offset,int(num_frames)-1)
                     neg_vid.set(cv2.CAP_PROP_POS_FRAMES,fr_ix)
                     _,frame = neg_vid.read()
+                    if frame is None:
+                        print('-----------------------------',neg_vid_sample,fr_ix,num_frames)
+                        fr_ix = random.randint(1+offset,int(num_frames)-1)
+                        neg_vid.set(cv2.CAP_PROP_POS_FRAMES,fr_ix)
+                        _,frame = neg_vid.read()
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    if 'sunglass' in vid:
+                    if 'sunglass' in neg_vid_sample:
                         frame[369:395,64:99] = 50
 
                     frame = Image.fromarray(frame)
                     frames.append(frame)
                     cats.append(1)
-                    if '_fp' in neg_vid_sample and len(self.morningside_no_spill_bboxes[vid][fr_ix//50]) > 0:
-                        bboxes.append(random.choice(self.morningside_no_spill_bboxes[vid][fr_ix//50]))
+                    if '_fp' in neg_vid_sample and len(self.morningside_no_spill_bboxes[neg_vid_sample][fr_ix//50]) > 0:
+                        bboxes.append(random.choice(self.morningside_no_spill_bboxes[neg_vid_sample][fr_ix//50]))
                     else:
-                        bboxes.append(bboxes[-1])
+                        bb_x,bb_y = np.random.randint(0,frame.size[0]-100),np.random.randint(0,frame.size[1]-100)
+                        bboxes.append((bb_x,bb_y,bb_x+100,bb_y+100))
 
             imgs = self.__get_image__(index, dataset='morningside', sampled_frames=(frames,bboxes,cats))
             pos_images.extend([img for img,cat in zip(imgs,cats) if cat==0])
