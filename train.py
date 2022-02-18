@@ -21,7 +21,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('exp','test','')
 flags.DEFINE_integer('num_workers',8,'')
 flags.DEFINE_integer('batch_size',8,'')
-flags.DEFINE_integer('epochs',40,'')
+flags.DEFINE_integer('epochs',70,'')
 flags.DEFINE_integer('val_batch',10,'')
 flags.DEFINE_float('lr',0.01,'')
 flags.DEFINE_float('temperature',0.06,'')
@@ -125,10 +125,14 @@ def main(argv):
     validation_set = CustomDataGen(VAL_IMAGES_PATH, batch_size, preprocess, train=False, color_distorts=color_distorts)
     validation_generator = torch.utils.data.DataLoader(validation_set, batch_size=None, shuffle=False, num_workers=4, pin_memory=True)
 
-    spill_det = SpillDetector(clip_model)
+    calibration_videos = {'not_spills': glob.glob("images/calibration/not_spills/*"), 'difficult_spills': glob.glob("images/calibration/difficult_spills/*"), \
+                          'obvious_spills': glob.glob("images/calibration/obvious_spills/*")}
+
+    spill_det = SpillDetector(clip_model, preprocess)
     spill_det.to('cuda')
 
-    #spill_det.load_state_dict(torch.load('weights/20Sep3.pt',map_location=torch.device('cuda')))
+    #spill_det.load_state_dict(torch.load('weights/3Feb2.pt',map_location=torch.device('cuda')))
+
     if FLAGS.proj_head > 0:
         optimizer = torch.optim.Adam([{'params':[spill_det.prototypes],'lr':FLAGS.lr},{'params':list(spill_det.proj_head.parameters()),'lr':0.001}], lr=FLAGS.lr)
     else:
@@ -145,7 +149,10 @@ def main(argv):
 
     aug_loss_avg = np.zeros(FLAGS.num_augs)
 
-    min_acc = 0.
+    min_low = 0.
+    min_diff = 0.
+    min_all = 0.
+
     total_loss = 0.
     step_loss = 0.
     train_iter = 0
@@ -219,11 +226,19 @@ def main(argv):
                 for g in optimizer.param_groups:
                     g['lr'] = 0.01'''
 
-            if train_iter == 1500:
+            if train_iter == 2000:
                 for g in optimizer.param_groups:
-                    g['lr'] = 0.001
+                    g['lr'] /= 3
+            elif train_iter == 4000:
+                for g in optimizer.param_groups:
+                    g['lr'] /= 3
+            elif train_iter == 6000:
+                for g in optimizer.param_groups:
+                    g['lr'] /= 3
 
         val_count = 0
+        total_val_conf = 0.
+        total_neg_conf = 0.
         num_crop_dims = FLAGS.num_crop_dims
         if FLAGS.num_crop_dims == 1:
             num_neg = 12
@@ -238,49 +253,12 @@ def main(argv):
         aug_loss_sums = np.array([0. for i in range(FLAGS.num_augs)])
         aug_loss_count = np.array([0 for i in range(FLAGS.num_augs)])'''
 
-        for data in validation_generator:
+        '''for data in validation_generator:
             with torch.no_grad():
                 img_patches = data.to('cuda')
                 if FLAGS.autocontrast:
                     img_patches = normalize(F_vis.autocontrast(inv_normalize(img_patches).clamp(0,1)))
 
-                '''patches_show = inv_normalize(img_patches).clamp(0,1).movedim(1,3).cpu().numpy()
-                neg_patches = patches_show[(10+3+4)*num_crop_dims:]
-                for p_ix,patch in enumerate(patches_show[:10*num_crop_dims]):
-                    cv2.imshow("Clear"+str(p_ix),patch[:,:,::-1])
-
-                for p_ix,patch in enumerate(patches_show[10*num_crop_dims:(10+3)*num_crop_dims]):
-                    cv2.imshow("Dark"+str(p_ix),patch[:,:,::-1])
-
-                for p_ix,patch in enumerate(patches_show[(10+3)*num_crop_dims:(10+3+4)*num_crop_dims]):
-                    cv2.imshow("Opaque"+str(p_ix),patch[:,:,::-1])
-
-                for p_ix,patch in enumerate(neg_patches[:36*4]):
-                    if p_ix % 10 > 0: continue
-                    cv2.imshow("Clear"+str(p_ix),patch[:,:,::-1])
-
-                for p_ix,patch in enumerate(neg_patches[36*10:36*(10+3)]):
-                    if p_ix % 10 > 0: continue
-                    cv2.imshow("Dark"+str(p_ix),patch[:,:,::-1])
-
-                for p_ix,patch in enumerate(neg_patches[36*(10+3):36*(10+3+4)]):
-                    if p_ix % 10 > 0: continue
-                    cv2.imshow("Opaque"+str(p_ix),patch[:,:,::-1])
-
-                key = cv2.waitKey(0)
-                if key==27:
-                    cv2.destroyAllWindows()
-                    exit()'''
-
-                '''pos_patches = img_patches[:(10+3+4)*num_crop_dims]
-                neg_patches = img_patches[(10+3+4)*num_crop_dims:]
-
-                aug_indices = np.random.choice(FLAGS.num_augs, size=4, replace=False, p=probs)
-
-                pos_patches, pos_pred = spill_det.aug_pred(pos_patches, apply_all=True, val=True, five_crop=False, aug_indices=aug_indices)
-                neg_patches, neg_pred = spill_det.aug_pred(neg_patches, apply_all=True, val=True, aug_indices=aug_indices)
-
-                sims = spill_det(torch.cat([pos_patches, neg_patches], dim=0))'''
                 sims = spill_det(img_patches)
                 pos_sims = sims[:(20)*FLAGS.num_distorts*num_crop_dims].reshape((20),FLAGS.num_distorts,num_crop_dims).max(dim=1)[0]
                 neg_sims = sims[(20)*FLAGS.num_distorts*num_crop_dims:].reshape((20),3,FLAGS.num_distorts,num_neg).max(dim=2)[0]
@@ -305,39 +283,21 @@ def main(argv):
                 #aug_loss_sums[aug_indices] += 10-batch_loss.cpu().numpy()
                 #aug_loss_count[aug_indices] += 1
 
-                '''# Augmented patches
-                sims = spill_det(aug_patches)
-                pos_sims = sims[:(10+3+5)*2*num_distorts].reshape(10+3+5,2,1*num_distorts).max(dim=2)[0]
-                neg_sims = sims[(10+3+5)*2*num_distorts:].reshape(FLAGS.val_batch,8+23,1*num_distorts).max(dim=2)[0]
-
-                sims_2x3 = torch.cat([pos_sims[:,0:1],neg_sims[:,:8].reshape(1,FLAGS.val_batch*8).tile(10+3+5,1)],dim=1)
-                sims_3x5 = torch.cat([pos_sims[:,1:2],neg_sims[:,8:8+23].reshape(1,FLAGS.val_batch*23).tile(10+3+5,1)],dim=1)
-                #sims_4x7 = torch.cat([pos_sims[:,2:3],neg_sims[:,8+23:8+23+46].reshape(1,FLAGS.val_batch*46).tile(10+3+5,1)],dim=1)
-
-                loss_2x3 += F.cross_entropy(sims_2x3/FLAGS.temperature,lab[:10+3+5])
-                loss_3x5 += F.cross_entropy(sims_3x5/FLAGS.temperature,lab[:10+3+5])
-                #loss_4x7 += F.cross_entropy(sims_4x7/FLAGS.temperature,lab[:10+3+5])'''
-
                 acc_clear_2x3 += (torch.argmax(sims_2x3[:20],dim=1)==0).float().mean()
                 if FLAGS.num_crop_dims > 1:
                     acc_clear_3x5 += (torch.argmax(sims_3x5[:20],dim=1)==0).float().mean()
                 #acc_clear_4x7 += (torch.argmax(sims_4x7[:10],dim=1)==0).float().mean()
 
-                '''acc_dark_2x3 += (torch.argmax(sims_2x3[10:10+3],dim=1)==0).float().mean()
-                if FLAGS.num_crop_dims > 1:
-                    acc_dark_3x5 += (torch.argmax(sims_3x5[10:10+3],dim=1)==0).float().mean()
-                #acc_dark_4x7 += (torch.argmax(sims_4x7[10:10+3],dim=1)==0).float().mean()
-
-                acc_opaque_2x3 += (torch.argmax(sims_2x3[10+3:10+3+4],dim=1)==0).float().mean()
-                if FLAGS.num_crop_dims > 1:
-                    acc_opaque_3x5 += (torch.argmax(sims_3x5[10+3:10+3+4],dim=1)==0).float().mean()
-                #acc_opaque_4x7 += (torch.argmax(sims_4x7[10+3:10+3+5],dim=1)==0).float().mean()'''
-
+                total_val_conf += pos_sims.mean()
+                total_neg_conf += neg_sims.mean()
                 val_count += 1
+
 
         #aug_loss_avg = aug_loss_sums/aug_loss_count
 
         log_dict = {"Epoch":epoch}
+        log_dict["Average_Val_Conf"] = total_val_conf/val_count
+        log_dict["Average_Neg_Conf"] = total_neg_conf/val_count
         log_dict["Org_val_loss_2x3"] = org_loss_2x3/val_count
         log_dict["Org_val_loss_3x5"] = org_loss_3x5/val_count
         log_dict["Org_val_loss_4x7"] = org_loss_4x7/val_count
@@ -352,19 +312,108 @@ def main(argv):
         log_dict["Val_acc_dark_4x7"] = acc_dark_4x7/val_count
         log_dict["Val_acc_opaque_2x3"] = acc_opaque_2x3/val_count
         log_dict["Val_acc_opaque_3x5"] = acc_opaque_3x5/val_count
-        log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count
+        log_dict["Val_acc_opaque_4x7"] = acc_opaque_4x7/val_count'''
+
+        print("Start Val: ",datetime.datetime.now())
+        all_sims = {}
+        for vid_class, vids in calibration_videos.items():
+            all_sims[vid_class] = []
+            for vid in vids:
+                cap = cv2.VideoCapture(vid)
+                all_sims[vid_class].append([])
+
+                count = 0
+                while(cap.isOpened()):
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    count += 1
+                    if count % 15 > 0:
+                        continue
+
+                    max_sim = spill_det.video_forward(frame)
+
+                    all_sims[vid_class][-1].append(max_sim)
+
+        for k,sims in all_sims.items():
+            gr_sims = []
+            for vid_sims in sims:
+                vid_freqs,bins = np.histogram(np.array(vid_sims),bins=80,range=(-1.,1.))
+                gr_sims.append(vid_freqs)
+
+            gr_sims = np.array(gr_sims)
+            gr_sims = gr_sims/gr_sims.sum(axis=1, keepdims=True)
+            gr_sims = np.cumsum(gr_sims, axis=1)
+            gr_sims = (1-gr_sims).mean(axis=0)
+
+            if k == 'not_spills':
+                not_hist = gr_sims.copy()
+            elif k == 'difficult_spills':
+                diff_hist = gr_sims.copy()
+            elif k == 'obvious_spills':
+                obv_hist = gr_sims.copy()
+
+        low_criteria = (obv_hist*(1-not_hist)).max()
+        low_thresh_ix = (obv_hist*(1-not_hist)).argmax()
+        low_thresh = [i/40 for i in range(-39,41)][low_thresh_ix]
+        low_not_perc = (1-not_hist)[low_thresh_ix]
+        low_diff_perc = diff_hist[low_thresh_ix]
+        low_obv_perc = obv_hist[low_thresh_ix]
+
+        diff_criteria = (diff_hist*(1-not_hist)).max()
+        diff_thresh_ix = (diff_hist*(1-not_hist)).argmax()
+        diff_thresh = [i/40 for i in range(-39,41)][diff_thresh_ix]
+        diff_not_perc = (1-not_hist)[diff_thresh_ix]
+        diff_diff_perc = diff_hist[diff_thresh_ix]
+        diff_obv_perc = obv_hist[diff_thresh_ix]
+
+        all_criteria = (diff_hist*obv_hist*(1-not_hist)**2).max()
+        all_thresh_ix = (diff_hist*obv_hist*(1-not_hist)**2).argmax()
+        all_thresh = [i/40 for i in range(-39,41)][all_thresh_ix]
+        all_not_perc = (1-not_hist)[all_thresh_ix]
+        all_diff_perc = diff_hist[all_thresh_ix]
+        all_obv_perc = obv_hist[all_thresh_ix]
+            
+
+        print("End Val: ",datetime.datetime.now())
+
+        log_dict['low_criteria'] = low_criteria
+        log_dict['low_thresh'] = low_thresh
+        log_dict['low_not_perc'] = low_not_perc
+        log_dict['low_diff_perc'] = low_diff_perc
+        log_dict['low_obv_perc'] = low_obv_perc
+
+        log_dict['diff_criteria'] = diff_criteria
+        log_dict['diff_thresh'] = diff_thresh
+        log_dict['diff_not_perc'] = diff_not_perc
+        log_dict['diff_diff_perc'] = diff_diff_perc
+        log_dict['diff_obv_perc'] = diff_obv_perc
+
+        log_dict['all_criteria'] = all_criteria
+        log_dict['all_thresh'] = all_thresh
+        log_dict['all_not_perc'] = all_not_perc
+        log_dict['all_diff_perc'] = all_diff_perc
+        log_dict['all_obv_perc'] = all_obv_perc
 
         wandb.log(log_dict)
 
-        val_accs = [acc_clear_2x3,acc_dark_2x3,acc_opaque_2x3]
+        #val_accs = [acc_clear_2x3,acc_dark_2x3,acc_opaque_2x3]
 
-        if sum(val_accs) > min_acc:
-            if FLAGS.proj_head > 0:
-                torch.save({'prototypes': spill_det.prototypes, 'proj_head': spill_det.proj_head},'weights/{}.pt'.format(FLAGS.exp))
-            else:
-                torch.save({'prototypes': spill_det.prototypes},'weights/{}.pt'.format(FLAGS.exp))
+        if low_criteria > min_low:
+            torch.save({'prototypes': spill_det.prototypes, 'proj_head': spill_det.proj_head, 'low_sensitivity_threshold': low_thresh, 'high_sensitivity_threshold': all_thresh},'weights/{}_low.pt'.format(FLAGS.exp))
 
-            min_acc = sum(val_accs)
+            min_low = low_criteria
+
+        if diff_criteria > min_diff:
+            torch.save({'prototypes': spill_det.prototypes, 'proj_head': spill_det.proj_head, 'low_sensitivity_threshold': low_thresh, 'high_sensitivity_threshold': diff_thresh},'weights/{}_diff.pt'.format(FLAGS.exp))
+
+            min_diff = diff_criteria
+
+        if all_criteria > min_all:
+            torch.save({'prototypes': spill_det.prototypes, 'proj_head': spill_det.proj_head, 'low_sensitivity_threshold': low_thresh, 'high_sensitivity_threshold': all_thresh},'weights/{}_all.pt'.format(FLAGS.exp))
+
+            min_all = all_criteria
 
 def loss_func(sims, lab):
     global batch_img_nums
